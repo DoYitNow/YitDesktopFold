@@ -1,0 +1,39 @@
+# Dependencies and generated web output
+node_modules/
+dist/
+
+# .NET build and test output
+**/bin/
+**/obj/
+TestResults/
+coverage/
+*.user
+*.suo
+.vs/
+
+# Local packaging output
+release/win-x64/
+release/*.zip
+
+# Local runtime / visual review sandboxes
+.desktop-layer-review/
+.icons-only-review/
+.memory-audit-empty/
+.memory-optimized-review/
+.no-flash-review/
+.runtime-review/
+
+# Local secrets and machine-specific configuration
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*.log
