@@ -355,6 +355,7 @@
             MouseEnter="OrganizerSurface_MouseEnter"
             MouseLeave="OrganizerSurface_MouseLeave"
             PreviewMouseLeftButtonDown="OrganizerSurface_PreviewMouseLeftButtonDown"
+            DragEnter="OrganizerSurface_DragOver"
             DragOver="OrganizerSurface_DragOver"
             Drop="OrganizerSurface_Drop">
         <Border.ContextMenu>

@@ -532,9 +532,7 @@ public partial class MainWindow : Window
         }
 
         var paths = GetDesktopDropPaths(e.Data);
-        e.Effects = paths.Any(ShortcutService.IsDesktopItem)
-            ? DragDropEffects.Copy
-            : DragDropEffects.None;
+        e.Effects = ChooseDesktopDropEffect(paths, e.AllowedEffects);
         e.Handled = true;
     }
 
@@ -557,6 +555,7 @@ public partial class MainWindow : Window
         }
 
         var paths = GetDesktopDropPaths(e.Data);
+        e.Effects = ChooseDesktopDropEffect(paths, e.AllowedEffects);
         _cachedDesktopDropData = null;
         _cachedDesktopDropPaths = [];
         await ImportPathsAsync(paths);
@@ -616,6 +615,22 @@ public partial class MainWindow : Window
             .ExtractDesktopDropPaths(data)
             .ToArray();
         return _cachedDesktopDropPaths;
+    }
+
+    private static DragDropEffects ChooseDesktopDropEffect(
+        IReadOnlyCollection<string> paths,
+        DragDropEffects allowedEffects)
+    {
+        if (paths.Count == 0)
+        {
+            return DragDropEffects.None;
+        }
+
+        var containsShellItem = paths.Any(DesktopShellItemService.IsShellNamespacePath);
+        var preference = containsShellItem
+            ? new[] { DragDropEffects.Link, DragDropEffects.Move, DragDropEffects.Copy }
+            : new[] { DragDropEffects.Copy, DragDropEffects.Move, DragDropEffects.Link };
+        return preference.FirstOrDefault(effect => (allowedEffects & effect) == effect);
     }
 
     private void Shortcut_Click(object sender, RoutedEventArgs e)
