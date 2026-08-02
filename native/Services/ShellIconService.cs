@@ -126,7 +126,8 @@ public sealed class ShellIconService
 
     private static ImageSource? GetHighResolutionShellImage(string path)
     {
-        if (!File.Exists(path) && !Directory.Exists(path))
+        if (!File.Exists(path) && !Directory.Exists(path) &&
+            !DesktopShellItemService.IsShellNamespacePath(path))
         {
             return null;
         }

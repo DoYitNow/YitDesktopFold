@@ -8,17 +8,68 @@ namespace YitDesktopFold.Native.Models;
 public sealed class ShortcutItem : INotifyPropertyChanged
 {
     private ImageSource? _icon;
+    private string _name = string.Empty;
+    private string _launchPath = string.Empty;
+    private string _desktopIdentity = string.Empty;
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
-    public string Name { get; set; } = string.Empty;
+    public string Name
+    {
+        get => _name;
+        set
+        {
+            value ??= string.Empty;
+            if (string.Equals(_name, value, StringComparison.Ordinal))
+            {
+                return;
+            }
 
-    public string LaunchPath { get; set; } = string.Empty;
+            _name = value;
+            OnPropertyChanged();
+        }
+    }
 
+    public string LaunchPath
+    {
+        get => _launchPath;
+        set
+        {
+            value ??= string.Empty;
+            if (string.Equals(_launchPath, value, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _launchPath = value;
+            Icon = null;
+            OnPropertyChanged();
+        }
+    }
+
+    public string DesktopIdentity
+    {
+        get => _desktopIdentity;
+        set
+        {
+            value ??= string.Empty;
+            if (string.Equals(_desktopIdentity, value, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _desktopIdentity = value;
+            OnPropertyChanged();
+        }
+    }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? OriginalPath { get; set; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool IsManaged { get; set; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool WasMovedFromDesktop { get; set; }
 
     public int AccentIndex { get; set; }

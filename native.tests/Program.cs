@@ -14,16 +14,24 @@ internal static class Program
     private static int Main()
     {
         var testRoot = Path.Combine(Path.GetTempPath(), "YitDesktopFold.Tests", Guid.NewGuid().ToString("N"));
+        var desktopRoot = Path.Combine(testRoot, "Desktop");
+        var commonDesktopRoot = Path.Combine(testRoot, "PublicDesktop");
         Environment.SetEnvironmentVariable("YITDESKTOPFOLD_DATA_DIR", testRoot);
+        Environment.SetEnvironmentVariable("YITDESKTOPFOLD_DESKTOP_DIR", desktopRoot);
+        Environment.SetEnvironmentVariable("YITDESKTOPFOLD_COMMON_DESKTOP_DIR", commonDesktopRoot);
+        Directory.CreateDirectory(desktopRoot);
+        Directory.CreateDirectory(commonDesktopRoot);
 
         try
         {
-            TestShortcutCopyAndSafeRemoval(testRoot);
+            TestDesktopCatalogClassificationAndSync(testRoot, desktopRoot, commonDesktopRoot);
+            TestLegacyManagedShortcutMigration(desktopRoot);
             TestStateRoundTripAndRecovery();
             TestCombinedSettingsDraftIsolation();
             TestFixedLayoutGeometry();
             TestMagneticSnapGeometry();
-            Console.WriteLine("PASS: shortcut import/removal");
+            Console.WriteLine("PASS: desktop catalog classification, identity sync, and file safety");
+            Console.WriteLine("PASS: legacy managed shortcuts migrate transactionally to Desktop");
             Console.WriteLine("PASS: multi-folder state round-trip/v1 migration/recovery");
             Console.WriteLine("PASS: global appearance draft isolation and normalization");
             Console.WriteLine("PASS: combined global/current-organizer settings draft isolation");
@@ -52,23 +60,111 @@ internal static class Program
         }
     }
 
-    private static void TestShortcutCopyAndSafeRemoval(string testRoot)
+    private static void TestDesktopCatalogClassificationAndSync(
+        string testRoot,
+        string desktopRoot,
+        string commonDesktopRoot)
     {
-        var sourceDirectory = Path.Combine(testRoot, "Source");
-        Directory.CreateDirectory(sourceDirectory);
-        var sourceShortcut = Path.Combine(sourceDirectory, "OpenAI.url");
-        File.WriteAllText(sourceShortcut, "[InternetShortcut]\nURL=https://openai.com/\n");
+        var userItem = Path.Combine(desktopRoot, "OpenAI.url");
+        var publicItem = Path.Combine(commonDesktopRoot, "Shared tool.txt");
+        var outsideItem = Path.Combine(testRoot, "outside.txt");
+        File.WriteAllText(userItem, "[InternetShortcut]\nURL=https://openai.com/\n");
+        File.WriteAllText(publicItem, "public");
+        File.WriteAllText(outsideItem, "outside");
 
-        var service = new ShortcutService();
-        var item = service.Import(sourceShortcut, moveDesktopShortcut: false, accentIndex: 2);
+        using var catalog = new DesktopCatalogService(watchForChanges: false);
+        var secondFolder = new OrganizerFolderState { Name = "Second" };
+        var state = new OrganizerAppState
+        {
+            Folders = [new OrganizerFolderState { Name = "Default" }, secondFolder],
+        };
+        Assert(catalog.Reconcile(state), "Initial Desktop catalog did not populate organizer metadata.");
+        Assert(state.Folders[0].Shortcuts.Count == 2, "User and Public Desktop items were not mirrored.");
+        Assert(!state.Folders.SelectMany(folder => folder.Shortcuts)
+                .Any(item => string.Equals(item.LaunchPath, outsideItem, StringComparison.OrdinalIgnoreCase)),
+            "An item outside the Desktop roots was incorrectly cataloged.");
 
-        Assert(File.Exists(sourceShortcut), "Copy import must retain the source shortcut.");
-        Assert(File.Exists(item.LaunchPath), "Managed shortcut copy was not created.");
-        Assert(item.IsManaged && !item.WasMovedFromDesktop, "Managed copy flags are invalid.");
+        var classified = state.Folders[0].Shortcuts.Single(item => item.LaunchPath == userItem);
+        state.Folders[0].Shortcuts.Remove(classified);
+        secondFolder.Shortcuts.Add(classified);
+        Assert(File.Exists(userItem), "Metadata-only classification moved or deleted the real Desktop item.");
+        Assert(!Directory.Exists(AppPaths.LegacyManagedShortcutsDirectory),
+            "Normal classification recreated the legacy managed-storage directory.");
 
-        service.RemoveAndRecover(item);
-        Assert(File.Exists(sourceShortcut), "Safe removal deleted the original shortcut.");
-        Assert(!File.Exists(item.LaunchPath), "Managed copy was not removed.");
+        var identityBeforeRename = classified.DesktopIdentity;
+        var renamedItem = Path.Combine(desktopRoot, "OpenAI renamed.url");
+        File.Move(userItem, renamedItem);
+        Assert(catalog.Reconcile(state), "A Desktop rename did not update organizer metadata.");
+        Assert(secondFolder.Shortcuts.Single().LaunchPath == renamedItem &&
+               secondFolder.Shortcuts.Single().DesktopIdentity == identityBeforeRename,
+            "Stable identity did not preserve classification across a rename.");
+
+        File.Delete(publicItem);
+        Assert(catalog.Reconcile(state), "A deleted Desktop item was not removed from metadata.");
+        Assert(state.Folders.SelectMany(folder => folder.Shortcuts).Count() == 1,
+            "Deleted Desktop metadata remained visible.");
+    }
+
+    private static void TestLegacyManagedShortcutMigration(string desktopRoot)
+    {
+        Directory.CreateDirectory(AppPaths.LegacyManagedShortcutsDirectory);
+        var managedPath = Path.Combine(AppPaths.LegacyManagedShortcutsDirectory, "Legacy.url");
+        File.WriteAllText(managedPath, "[InternetShortcut]\nURL=https://example.com/\n");
+        var state = new OrganizerAppState
+        {
+            SchemaVersion = 2,
+            Folders =
+            [
+                new OrganizerFolderState
+                {
+                    Shortcuts =
+                    [
+                        new ShortcutItem
+                        {
+                            Name = "Legacy",
+                            LaunchPath = managedPath,
+                            OriginalPath = Path.Combine(desktopRoot, "Legacy.url"),
+                            IsManaged = true,
+                            WasMovedFromDesktop = true,
+                        },
+                    ],
+                },
+            ],
+        };
+
+        var transaction = LegacyDesktopMigration.Begin(state);
+        new StateStore().Save(state);
+        transaction.Commit();
+        var migrated = state.Folders[0].Shortcuts[0];
+        Assert(state.SchemaVersion == 3 && File.Exists(migrated.LaunchPath),
+            "Legacy managed shortcut was not restored to the real Desktop.");
+        Assert(AppPaths.IsDirectDesktopItem(migrated.LaunchPath) && !File.Exists(managedPath),
+            "Legacy shortcut remained in application-managed storage.");
+        Assert(!migrated.IsManaged && !migrated.WasMovedFromDesktop && migrated.OriginalPath is null,
+            "Legacy storage flags survived schema-v3 migration.");
+
+        var rollbackPath = Path.Combine(AppPaths.LegacyManagedShortcutsDirectory, "Rollback.url");
+        File.WriteAllText(rollbackPath, "[InternetShortcut]\nURL=https://rollback.example/\n");
+        var rollbackItem = new ShortcutItem
+        {
+            Name = "Rollback",
+            LaunchPath = rollbackPath,
+            OriginalPath = Path.Combine(desktopRoot, "Rollback.url"),
+            IsManaged = true,
+            WasMovedFromDesktop = true,
+        };
+        var rollbackState = new OrganizerAppState
+        {
+            SchemaVersion = 2,
+            Folders = [new OrganizerFolderState { Shortcuts = [rollbackItem] }],
+        };
+        var rollback = LegacyDesktopMigration.Begin(rollbackState);
+        Assert(!File.Exists(rollbackPath) && AppPaths.IsDirectDesktopItem(rollbackItem.LaunchPath),
+            "Rollback fixture was not moved into its transactional destination.");
+        rollback.Rollback();
+        Assert(File.Exists(rollbackPath) && rollbackItem.LaunchPath == rollbackPath && rollbackItem.IsManaged,
+            "Failed migration could not restore the legacy file and metadata.");
+        File.Delete(rollbackPath);
     }
 
     private static void TestStateRoundTripAndRecovery()
@@ -216,8 +312,8 @@ internal static class Program
             """);
         File.Delete(AppPaths.BackupStateFile);
         var migrated = store.Load();
-        Assert(migrated.SchemaVersion == 2 && migrated.Folders.Count == 1,
-            "Legacy state did not migrate to one schema-v2 folder.");
+        Assert(migrated.SchemaVersion == 3 && migrated.Folders.Count == 1,
+            "Legacy state did not migrate to one schema-v3 folder.");
         Assert(migrated.Folders[0].Left == 72 && migrated.Folders[0].Shortcuts.Count == 1,
             "Legacy placement or shortcuts were not preserved.");
         Assert(!migrated.Folders[0].ShowName &&
@@ -238,7 +334,8 @@ internal static class Program
         store.Save(restoredFromBackup);
         Assert(store.Load().Folders.Count == 2, "Saving after backup recovery corrupted state.");
 
-        var orphan = Path.Combine(AppPaths.ManagedShortcutsDirectory, "Recovered.url");
+        var orphan = Path.Combine(AppPaths.LegacyManagedShortcutsDirectory, "Recovered.url");
+        Directory.CreateDirectory(AppPaths.LegacyManagedShortcutsDirectory);
         File.WriteAllText(orphan, "[InternetShortcut]\nURL=https://example.com/\n");
         File.WriteAllText(AppPaths.StateFile, "{ invalid json");
         File.WriteAllText(AppPaths.BackupStateFile, "{ invalid json");
@@ -246,8 +343,10 @@ internal static class Program
         Assert(recovered.Folders.Count == 1 &&
                !recovered.Folders[0].ShowIconNames &&
                !recovered.Folders[0].IconsOnly &&
-               recovered.Folders[0].Shortcuts.Any(item => item.LaunchPath == orphan),
-            "Corrupt state did not recover managed shortcuts into a default folder.");
+               recovered.Folders[0].Shortcuts.Any(item =>
+                   AppPaths.IsDirectDesktopItem(item.LaunchPath) && File.Exists(item.LaunchPath)) &&
+               !File.Exists(orphan),
+            "Corrupt state did not recover legacy managed shortcuts to Desktop.");
     }
 
     private static void TestCombinedSettingsDraftIsolation()

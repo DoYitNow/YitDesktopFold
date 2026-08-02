@@ -12,9 +12,10 @@ public partial class App : Application
     private const string InstanceMutexName = @"Local\YitDesktopFold.Native.Instance";
     private const string ShowRequestEventName = @"Local\YitDesktopFold.Native.ShowRequest";
     private readonly StateStore _stateStore = new();
-    private readonly ShortcutService _shortcutService = new();
     private readonly ShellIconService _iconService = new();
     private readonly List<MainWindow> _windows = [];
+    private DesktopCatalogService? _desktopCatalog;
+    private DesktopIconVisibilityService? _desktopIconVisibility;
     private Mutex? _instanceMutex;
     private EventWaitHandle? _showRequestEvent;
     private RegisteredWaitHandle? _showRequestRegistration;
@@ -65,6 +66,13 @@ public partial class App : Application
             _state.Folders.Add(new OrganizerFolderState());
         }
 
+        _desktopCatalog = new DesktopCatalogService();
+        if (_desktopCatalog.Reconcile(_state))
+        {
+            _stateStore.Save(_state);
+        }
+        _desktopCatalog.CatalogChanged += DesktopCatalog_CatalogChanged;
+
         _saveTimer = new DispatcherTimer(DispatcherPriority.ApplicationIdle)
         {
             Interval = TimeSpan.FromMilliseconds(350),
@@ -97,6 +105,7 @@ public partial class App : Application
             executeOnlyOnce: false);
 
         CreateTrayIcon();
+        _desktopIconVisibility = new DesktopIconVisibilityService();
         _keyboardHotKey = new GlobalHotKeyService();
         _keyboardHotKey.Pressed += KeyboardHotKey_Pressed;
         foreach (var window in _windows)
@@ -154,8 +163,21 @@ public partial class App : Application
         }
 
         window.CaptureState();
+        var fallbackFolder = _state.Folders.First(folder => folder.Id != window.FolderState.Id);
+        var fallbackIdentities = fallbackFolder.Shortcuts
+            .Select(item => item.DesktopIdentity)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in window.FolderState.Shortcuts)
+        {
+            if (fallbackIdentities.Add(item.DesktopIdentity))
+            {
+                fallbackFolder.Shortcuts.Add(item);
+            }
+        }
+
         _windows.Remove(window);
         _state.Folders.Remove(window.FolderState);
+        FindWindow(fallbackFolder.Id)?.SynchronizeItemsFromState();
         _iconService.RetainOnly(_state.Folders.SelectMany(folder => folder.Shortcuts).Select(item => item.LaunchPath));
         _lastActiveWindow = _windows.LastOrDefault();
         MainWindow = _windows[0];
@@ -389,6 +411,126 @@ public partial class App : Application
         _saveTimer.Start();
     }
 
+    public bool MoveDesktopItem(
+        Guid sourceFolderId,
+        Guid targetFolderId,
+        string desktopIdentity,
+        string? beforeDesktopIdentity = null)
+    {
+        var source = _state.Folders.FirstOrDefault(folder => folder.Id == sourceFolderId);
+        var target = _state.Folders.FirstOrDefault(folder => folder.Id == targetFolderId);
+        if (source is null || target is null || string.IsNullOrWhiteSpace(desktopIdentity))
+        {
+            return false;
+        }
+
+        var item = source.Shortcuts.FirstOrDefault(candidate =>
+            string.Equals(candidate.DesktopIdentity, desktopIdentity, StringComparison.OrdinalIgnoreCase));
+        if (item is null)
+        {
+            return false;
+        }
+
+        if (sourceFolderId == targetFolderId &&
+            string.Equals(desktopIdentity, beforeDesktopIdentity, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        source.Shortcuts.Remove(item);
+        var duplicate = target.Shortcuts.FirstOrDefault(candidate =>
+            string.Equals(candidate.DesktopIdentity, desktopIdentity, StringComparison.OrdinalIgnoreCase));
+        if (duplicate is not null)
+        {
+            target.Shortcuts.Remove(duplicate);
+        }
+
+        var insertionIndex = string.IsNullOrWhiteSpace(beforeDesktopIdentity)
+            ? -1
+            : target.Shortcuts.FindIndex(candidate =>
+                string.Equals(candidate.DesktopIdentity, beforeDesktopIdentity, StringComparison.OrdinalIgnoreCase));
+        if (insertionIndex < 0)
+        {
+            target.Shortcuts.Add(item);
+        }
+        else
+        {
+            target.Shortcuts.Insert(insertionIndex, item);
+        }
+
+        FindWindow(sourceFolderId)?.SynchronizeItemsFromState();
+        if (targetFolderId != sourceFolderId)
+        {
+            FindWindow(targetFolderId)?.SynchronizeItemsFromState();
+        }
+
+        QueueSave();
+        return true;
+    }
+
+    public bool MoveDesktopItemToDefault(Guid sourceFolderId, string desktopIdentity)
+    {
+        var defaultFolder = _state.Folders[0];
+        if (defaultFolder.Id == sourceFolderId)
+        {
+            return false;
+        }
+
+        return MoveDesktopItem(sourceFolderId, defaultFolder.Id, desktopIdentity);
+    }
+
+    public int AssignDesktopItems(Guid targetFolderId, IEnumerable<string> paths)
+    {
+        var target = _state.Folders.FirstOrDefault(folder => folder.Id == targetFolderId);
+        if (target is null || _desktopCatalog is null)
+        {
+            return 0;
+        }
+
+        var assigned = 0;
+        foreach (var path in paths
+                     .Where(ShortcutService.IsDesktopItem)
+                     .Select(Path.GetFullPath)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var existing = _state.Folders
+                .SelectMany(folder => folder.Shortcuts.Select(item => (Folder: folder, Item: item)))
+                .FirstOrDefault(pair => string.Equals(
+                    pair.Item.LaunchPath,
+                    path,
+                    StringComparison.OrdinalIgnoreCase));
+            if (existing.Item is not null)
+            {
+                if (existing.Folder.Id != targetFolderId)
+                {
+                    MoveDesktopItem(existing.Folder.Id, targetFolderId, existing.Item.DesktopIdentity);
+                }
+
+                assigned++;
+                continue;
+            }
+
+            var item = _desktopCatalog.CreateReference(path, target.Shortcuts.Count);
+            target.Shortcuts.Add(item);
+            assigned++;
+        }
+
+        FindWindow(targetFolderId)?.SynchronizeItemsFromState();
+        QueueSave();
+        return assigned;
+    }
+
+    public void RefreshDesktopCatalog()
+    {
+        if (_desktopCatalog?.Reconcile(_state) != true)
+        {
+            return;
+        }
+
+        SynchronizeAllWindows();
+        QueueSave();
+    }
+
     public bool TrySaveAll(out string? error)
     {
         _saveTimer?.Stop();
@@ -439,7 +581,7 @@ public partial class App : Application
 
     private MainWindow CreateWindow(OrganizerFolderState folder)
     {
-        var window = new MainWindow(folder, _shortcutService, _iconService);
+        var window = new MainWindow(folder, _iconService);
         window.ApplyAppearance(_appearancePreview ?? _state.Appearance, animate: false);
         window.Activated += (_, _) => MarkActive(window);
         _windows.Add(window);
@@ -491,14 +633,14 @@ public partial class App : Application
             case NativeTrayCommand.KeyboardMode:
                 EnterKeyboardMode();
                 break;
-            case NativeTrayCommand.AddShortcuts:
+            case NativeTrayCommand.AssignDesktopItems:
                 GetTargetWindow()?.OpenShortcutPicker();
                 break;
             case NativeTrayCommand.Settings:
                 ShowAppearanceSettings();
                 break;
-            case NativeTrayCommand.OpenManagedDirectory:
-                ShortcutService.OpenManagedDirectory();
+            case NativeTrayCommand.OpenDesktopDirectory:
+                ShortcutService.OpenDesktopDirectory();
                 break;
             case NativeTrayCommand.Exit:
                 RequestExit();
@@ -547,6 +689,14 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _saveTimer?.Stop();
+        _desktopIconVisibility?.Dispose();
+        _desktopIconVisibility = null;
+        if (_desktopCatalog is not null)
+        {
+            _desktopCatalog.CatalogChanged -= DesktopCatalog_CatalogChanged;
+            _desktopCatalog.Dispose();
+            _desktopCatalog = null;
+        }
         if (_trayIcon is not null)
         {
             _trayIcon.CommandInvoked -= TrayIcon_CommandInvoked;
@@ -569,5 +719,27 @@ public partial class App : Application
 
         _instanceMutex?.Dispose();
         base.OnExit(e);
+    }
+
+    private void DesktopCatalog_CatalogChanged(object? sender, EventArgs e)
+    {
+        if (IsExiting)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(RefreshDesktopCatalog, DispatcherPriority.Background);
+    }
+
+    private void SynchronizeAllWindows()
+    {
+        foreach (var window in _windows)
+        {
+            window.SynchronizeItemsFromState();
+        }
+
+        _iconService.RetainOnly(_state.Folders
+            .SelectMany(folder => folder.Shortcuts)
+            .Select(item => item.LaunchPath));
     }
 }

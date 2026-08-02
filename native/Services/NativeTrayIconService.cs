@@ -8,9 +8,9 @@ public enum NativeTrayCommand
     CreateOrganizer = 1,
     ToggleAllOrganizers,
     KeyboardMode,
-    AddShortcuts,
+    AssignDesktopItems,
     Settings,
-    OpenManagedDirectory,
+    OpenDesktopDirectory,
     Exit,
 }
 
@@ -170,9 +170,9 @@ public sealed class NativeTrayIconService : IDisposable
             AppendCommand(menu, NativeTrayCommand.CreateOrganizer, "新建整理块");
             AppendCommand(menu, NativeTrayCommand.ToggleAllOrganizers, "显示 / 隐藏全部");
             AppendCommand(menu, NativeTrayCommand.KeyboardMode, "键盘操作模式\tCtrl+Alt+D");
-            AppendCommand(menu, NativeTrayCommand.AddShortcuts, "添加快捷方式…");
+            AppendCommand(menu, NativeTrayCommand.AssignDesktopItems, "归类桌面项目…");
             AppendCommand(menu, NativeTrayCommand.Settings, "外观与吸附…");
-            AppendCommand(menu, NativeTrayCommand.OpenManagedDirectory, "打开管理目录");
+            AppendCommand(menu, NativeTrayCommand.OpenDesktopDirectory, "打开桌面目录");
             _ = AppendMenu(menu, MfSeparator, UIntPtr.Zero, null);
             AppendCommand(menu, NativeTrayCommand.Exit, "退出");
 

@@ -24,7 +24,7 @@
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Display"
-        AutomationProperties.Name="桌面快捷方式整理块"
+        AutomationProperties.Name="桌面项目整理块"
         SourceInitialized="Window_SourceInitialized"
         Loaded="Window_Loaded"
         Closing="Window_Closing"
@@ -154,6 +154,7 @@
             <EventSetter Event="MouseEnter" Handler="ShortcutButton_MouseEnter" />
             <EventSetter Event="MouseLeave" Handler="ShortcutButton_MouseLeave" />
             <EventSetter Event="PreviewMouseDown" Handler="ShortcutButton_PreviewMouseDown" />
+            <EventSetter Event="PreviewMouseMove" Handler="ShortcutButton_PreviewMouseMove" />
             <EventSetter Event="PreviewMouseUp" Handler="ShortcutButton_PreviewMouseUp" />
             <EventSetter Event="LostMouseCapture" Handler="ShortcutButton_LostMouseCapture" />
             <Setter Property="Padding" Value="0" />
@@ -328,7 +329,7 @@
         <ContextMenu x:Key="ShortcutContextMenu"
                      Style="{StaticResource DarkContextMenuStyle}"
                      DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-            <MenuItem Header="移回桌面并移除…"
+            <MenuItem Header="移至默认整理块"
                       Style="{StaticResource DarkMenuItemStyle}"
                       Click="RemoveShortcut_Click" />
         </ContextMenu>
@@ -352,9 +353,9 @@
                 <MenuItem Header="新建整理块"
                           Style="{StaticResource DarkMenuItemStyle}"
                           Click="NewOrganizer_Click" />
-                <MenuItem Header="添加快捷方式…"
+                <MenuItem Header="归类桌面项目…"
                           Style="{StaticResource DarkMenuItemStyle}"
-                          Click="AddShortcuts_Click" />
+                          Click="AssignDesktopItems_Click" />
                 <Separator Style="{StaticResource DarkSeparatorStyle}" />
                 <MenuItem Header="重命名整理块…"
                           Style="{StaticResource DarkMenuItemStyle}"
@@ -362,9 +363,9 @@
                 <MenuItem Header="外观与吸附…"
                           Style="{StaticResource DarkMenuItemStyle}"
                           Click="AppearanceSettings_Click" />
-                <MenuItem Header="打开管理目录"
+                <MenuItem Header="打开桌面目录"
                           Style="{StaticResource DarkMenuItemStyle}"
-                          Click="OpenManagedFolder_Click" />
+                          Click="OpenDesktopFolder_Click" />
                 <Separator Style="{StaticResource DarkSeparatorStyle}" />
                 <MenuItem x:Name="StartWithWindowsItem"
                           Header="登录 Windows 时启动"

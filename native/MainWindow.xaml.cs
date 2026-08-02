@@ -19,6 +19,7 @@ namespace YitDesktopFold.Native;
 
 public partial class MainWindow : Window
 {
+    private const string DesktopItemDragFormat = "YitDesktopFold/DesktopItem";
     private const double DefaultWidth = 444;
     private const double DefaultHeight = 340;
     private const double DefaultRightGap = 116;
@@ -43,7 +44,6 @@ public partial class MainWindow : Window
         new PropertyMetadata(false));
 
     private readonly OrganizerFolderState _folderState;
-    private readonly ShortcutService _shortcutService;
     private readonly ShellIconService _iconService;
     private readonly SolidColorBrush _surfaceBrush = new(Color.FromArgb(0, 0x2D, 0x32, 0x38));
     private OrganizerAppearanceState _currentAppearance = new();
@@ -71,16 +71,18 @@ public partial class MainWindow : Window
     private double _rawResizeWidth;
     private double _rawResizeHeight;
     private Rect[] _resizeSnapTargets = [];
+    private Point _shortcutDragStart;
+    private ShortcutItem? _shortcutDragCandidate;
+    private bool _suppressNextShortcutClick;
+    private bool _synchronizingItems;
 
     public MainWindow(
         OrganizerFolderState folderState,
-        ShortcutService shortcutService,
         ShellIconService iconService)
     {
         InitializeComponent();
 
         _folderState = folderState;
-        _shortcutService = shortcutService;
         _iconService = iconService;
         OrganizerSurface.Background = _surfaceBrush;
         ShowIconNames = _folderState.ShowIconNames;
@@ -111,6 +113,25 @@ public partial class MainWindow : Window
     public OrganizerFolderState FolderState => _folderState;
 
     public bool IsOrganizerHidden => _isOrganizerHidden;
+
+    public void SynchronizeItemsFromState()
+    {
+        _synchronizingItems = true;
+        try
+        {
+            Items.Clear();
+            foreach (var item in _folderState.Shortcuts)
+            {
+                Items.Add(item);
+            }
+        }
+        finally
+        {
+            _synchronizingItems = false;
+        }
+
+        _ = LoadMissingIconsAsync(Items);
+    }
 
     private bool EffectiveIconsOnly =>
         _displayPreviewActive ? _previewIconsOnly : _folderState.IconsOnly;
@@ -467,7 +488,21 @@ public partial class MainWindow : Window
 
     private void OrganizerSurface_DragOver(object sender, DragEventArgs e)
     {
-        if (_dialogOpen || !e.Data.GetDataPresent(DataFormats.FileDrop))
+        if (_dialogOpen)
+        {
+            e.Effects = DragDropEffects.None;
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Data.GetDataPresent(DesktopItemDragFormat))
+        {
+            e.Effects = DragDropEffects.Move;
+            e.Handled = true;
+            return;
+        }
+
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop))
         {
             e.Effects = DragDropEffects.None;
             e.Handled = true;
@@ -475,7 +510,7 @@ public partial class MainWindow : Window
         }
 
         var paths = (string[]?)e.Data.GetData(DataFormats.FileDrop) ?? [];
-        e.Effects = paths.Any(ShortcutService.IsSupportedPath)
+        e.Effects = paths.Any(ShortcutService.IsDesktopItem)
             ? DragDropEffects.Copy
             : DragDropEffects.None;
         e.Handled = true;
@@ -489,8 +524,17 @@ public partial class MainWindow : Window
             return;
         }
 
-        var paths = (string[]?)e.Data.GetData(DataFormats.FileDrop) ?? [];
         e.Handled = true;
+        if (e.Data.GetDataPresent(DesktopItemDragFormat) &&
+            e.Data.GetData(DesktopItemDragFormat) is string payload &&
+            TryParseDesktopDragPayload(payload, out var sourceFolderId, out var identity))
+        {
+            var beforeIdentity = FindShortcutItem(e.OriginalSource as DependencyObject)?.DesktopIdentity;
+            AppHost.MoveDesktopItem(sourceFolderId, _folderState.Id, identity, beforeIdentity);
+            return;
+        }
+
+        var paths = (string[]?)e.Data.GetData(DataFormats.FileDrop) ?? [];
         await ImportPathsAsync(paths);
     }
 
@@ -499,10 +543,11 @@ public partial class MainWindow : Window
         AppHost.MarkActive(this);
         var dialog = new OpenFileDialog
         {
-            Title = "添加快捷方式",
-            Filter = "可启动项目|*.lnk;*.url;*.appref-ms;*.exe;*.com;*.bat;*.cmd;*.msc|所有文件|*.*",
+            Title = "归类桌面项目",
+            Filter = "桌面文件|*.*",
             Multiselect = true,
             CheckFileExists = true,
+            InitialDirectory = AppPaths.DesktopDirectory,
         };
 
         if (dialog.ShowDialog(this) == true)
@@ -516,84 +561,31 @@ public partial class MainWindow : Window
     private async Task ImportPathsAsync(IEnumerable<string> sourcePaths)
     {
         var paths = sourcePaths
-            .Where(ShortcutService.IsSupportedPath)
+            .Where(ShortcutService.IsDesktopItem)
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(path => !Items.Any(item =>
-                string.Equals(item.OriginalPath, path, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(item.LaunchPath, path, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
 
         if (paths.Length == 0)
         {
-            ShowToast("没有可添加的新快捷方式");
-            return;
-        }
-
-        var desktopShortcuts = paths.Where(_shortcutService.IsDesktopShortcut).ToArray();
-        var moveDesktopShortcuts = false;
-        if (desktopShortcuts.Length > 0)
-        {
-            var choice = await ShowChoiceDialogAsync(
-                "收纳桌面快捷方式",
-                $"检测到 {desktopShortcuts.Length} 个桌面快捷方式。移入会从当前桌面收纳，之后移除时可恢复；仅复制不会改动桌面。公共桌面项目始终只复制。",
-                primaryText: "移入",
-                secondaryText: "仅复制",
-                cancelText: "取消");
-
-            if (choice == DialogChoice.Cancel)
-            {
-                return;
-            }
-
-            moveDesktopShortcuts = choice == DialogChoice.Primary;
-        }
-
-        var imported = new List<ShortcutItem>();
-        try
-        {
-            foreach (var path in paths)
-            {
-                var item = _shortcutService.Import(path, moveDesktopShortcuts, Items.Count + imported.Count);
-                imported.Add(item);
-                Items.Add(item);
-            }
-
-            if (!TrySaveState(showError: false, out var saveError))
-            {
-                throw new IOException(saveError ?? "无法保存整理块状态。");
-            }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            foreach (var item in imported.AsEnumerable().Reverse())
-            {
-                try
-                {
-                    _shortcutService.RemoveAndRecover(item);
-                }
-                catch
-                {
-                    // The managed directory remains a recovery source if rollback is blocked.
-                }
-
-                Items.Remove(item);
-                _iconService.Forget(item.LaunchPath);
-            }
-
-            TrySaveState(showError: false);
             await ShowAlertAsync(
-                "未能完成收纳",
-                $"没有保留未完成的更改，原快捷方式已尽量恢复。\n{exception.Message}");
+                "无法加入这个项目",
+                "整理块只分类用户桌面或公共桌面根目录中的真实项目，不会复制或移动其他位置的文件。");
             return;
         }
 
-        _ = LoadMissingIconsAsync(imported);
-        ShowToast($"已添加 {imported.Count} 个快捷方式");
+        var assigned = AppHost.AssignDesktopItems(_folderState.Id, paths);
+        ShowToast($"已归类 {assigned} 个桌面项目");
     }
 
     private void Shortcut_Click(object sender, RoutedEventArgs e)
     {
+        if (_suppressNextShortcutClick)
+        {
+            _suppressNextShortcutClick = false;
+            return;
+        }
+
         if (sender is not FrameworkElement { DataContext: ShortcutItem item })
         {
             return;
@@ -613,35 +605,20 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void RemoveShortcut_Click(object sender, RoutedEventArgs e)
+    private void RemoveShortcut_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: ShortcutItem item })
         {
             return;
         }
 
-        var choice = await ShowChoiceDialogAsync(
-            "移除快捷方式",
-            $"从这个整理块移除“{item.Name}”？如果它曾从桌面收纳进来，会先恢复到桌面。",
-            primaryText: "移除",
-            secondaryText: null,
-            cancelText: "保留");
-        if (choice != DialogChoice.Primary)
+        if (AppHost.MoveDesktopItemToDefault(_folderState.Id, item.DesktopIdentity))
         {
-            return;
+            ShowToast("已移至默认整理块");
         }
-
-        try
+        else
         {
-            var message = _shortcutService.RemoveAndRecover(item);
-            Items.Remove(item);
-            _iconService.Forget(item.LaunchPath);
-            TrySaveState(showError: true);
-            ShowToast(message);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            await ShowAlertAsync("没有移除任何内容", exception.Message);
+            ShowToast("该项目已在默认整理块中");
         }
     }
 
@@ -861,6 +838,11 @@ public partial class MainWindow : Window
 
     private void Items_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (_synchronizingItems)
+        {
+            return;
+        }
+
         _folderState.Shortcuts = Items.ToList();
         QueueSave();
     }
@@ -1070,12 +1052,43 @@ public partial class MainWindow : Window
     {
         if (sender is Button button && e.ChangedButton == MouseButton.Left && !_dialogOpen)
         {
+            _shortcutDragStart = e.GetPosition(this);
+            _shortcutDragCandidate = button.DataContext as ShortcutItem;
             AnimateShortcut(button, 0.965, 0, 60);
         }
     }
 
+    private void ShortcutButton_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_dialogOpen || e.LeftButton != MouseButtonState.Pressed ||
+            sender is not Button button || _shortcutDragCandidate is not { } item)
+        {
+            return;
+        }
+
+        var current = e.GetPosition(this);
+        if (Math.Abs(current.X - _shortcutDragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(current.Y - _shortcutDragStart.Y) < SystemParameters.MinimumVerticalDragDistance)
+        {
+            return;
+        }
+
+        _shortcutDragCandidate = null;
+        _suppressNextShortcutClick = true;
+        var data = new DataObject();
+        data.SetData(
+            DesktopItemDragFormat,
+            $"{_folderState.Id:N}|{item.DesktopIdentity}",
+            autoConvert: false);
+        _ = DragDrop.DoDragDrop(button, data, DragDropEffects.Move);
+        Dispatcher.BeginInvoke(
+            () => _suppressNextShortcutClick = false,
+            DispatcherPriority.Input);
+    }
+
     private void ShortcutButton_PreviewMouseUp(object sender, MouseButtonEventArgs e)
     {
+        _shortcutDragCandidate = null;
         if (sender is Button button && e.ChangedButton == MouseButton.Left)
         {
             AnimateShortcut(button, button.IsMouseOver ? 1.025 : 1, button.IsMouseOver ? -2 : 0, 95);
@@ -1084,10 +1097,39 @@ public partial class MainWindow : Window
 
     private void ShortcutButton_LostMouseCapture(object sender, MouseEventArgs e)
     {
+        _shortcutDragCandidate = null;
         if (sender is Button button)
         {
             AnimateShortcut(button, button.IsMouseOver ? 1.025 : 1, button.IsMouseOver ? -2 : 0, 110);
         }
+    }
+
+    private static bool TryParseDesktopDragPayload(
+        string payload,
+        out Guid sourceFolderId,
+        out string identity)
+    {
+        sourceFolderId = Guid.Empty;
+        var separator = payload.IndexOf('|');
+        identity = separator >= 0 ? payload[(separator + 1)..] : string.Empty;
+        return separator > 0 &&
+               Guid.TryParseExact(payload[..separator], "N", out sourceFolderId) &&
+               !string.IsNullOrWhiteSpace(identity);
+    }
+
+    private static ShortcutItem? FindShortcutItem(DependencyObject? element)
+    {
+        while (element is not null)
+        {
+            if (element is FrameworkElement { DataContext: ShortcutItem item })
+            {
+                return item;
+            }
+
+            element = VisualTreeHelper.GetParent(element);
+        }
+
+        return null;
     }
 
     private static void AnimateShortcut(Button button, double scaleValue, double y, int milliseconds)
@@ -1345,13 +1387,13 @@ public partial class MainWindow : Window
         }
     }
 
-    public void OpenManagedFolder() => ShortcutService.OpenManagedDirectory();
+    public void OpenDesktopFolder() => ShortcutService.OpenDesktopDirectory();
 
     private void NewOrganizer_Click(object sender, RoutedEventArgs e) => AppHost.CreateOrganizer(this);
 
-    private void AddShortcuts_Click(object sender, RoutedEventArgs e) => OpenShortcutPicker();
+    private void AssignDesktopItems_Click(object sender, RoutedEventArgs e) => OpenShortcutPicker();
 
-    private void OpenManagedFolder_Click(object sender, RoutedEventArgs e) => OpenManagedFolder();
+    private void OpenDesktopFolder_Click(object sender, RoutedEventArgs e) => OpenDesktopFolder();
 
     private void OrganizerMenu_Opened(object sender, RoutedEventArgs e)
     {
@@ -1389,37 +1431,18 @@ public partial class MainWindow : Window
         }
 
         var message = Items.Count == 0
-            ? $"删除“{_folderState.Name}”？这个空整理块会从桌面移除。"
-            : $"删除“{_folderState.Name}”？其中 {Items.Count} 个项目会先安全移回桌面，再移除整理块。";
+            ? $"删除“{_folderState.Name}”？"
+            : $"删除“{_folderState.Name}”？其中 {Items.Count} 个桌面项目会归入默认整理块，真实文件不会移动。";
         var choice = await ShowChoiceDialogAsync(
             "删除整理块",
             message,
             primaryText: "删除",
             secondaryText: null,
             cancelText: "保留");
-        if (choice != DialogChoice.Primary)
+        if (choice == DialogChoice.Primary)
         {
-            return;
+            AppHost.RemoveOrganizer(this);
         }
-
-        foreach (var item in Items.ToArray())
-        {
-            try
-            {
-                _shortcutService.RemoveAndRecover(item);
-                Items.Remove(item);
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                TrySaveState(showError: false);
-                await ShowAlertAsync(
-                    "整理块尚未删除",
-                    $"“{item.Name}”未能安全恢复，已保留剩余内容。\n{exception.Message}");
-                return;
-            }
-        }
-
-        AppHost.RemoveOrganizer(this);
     }
 
     private async void StartWithWindows_Click(object sender, RoutedEventArgs e)

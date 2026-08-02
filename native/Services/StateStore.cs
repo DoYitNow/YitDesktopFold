@@ -31,7 +31,7 @@ public sealed class StateStore
         var state = TryLoad(AppPaths.StateFile);
         if (state is not null)
         {
-            return Normalize(state);
+            return FinalizeLoadedState(state);
         }
 
         state = TryLoad(AppPaths.BackupStateFile);
@@ -39,11 +39,11 @@ public sealed class StateStore
         {
             BackupCorruptState();
             TryRestorePrimaryFromBackup();
-            return Normalize(state);
+            return FinalizeLoadedState(state);
         }
 
         BackupCorruptState();
-        return new OrganizerAppState
+        return FinalizeLoadedState(new OrganizerAppState
         {
             Folders =
             [
@@ -52,13 +52,13 @@ public sealed class StateStore
                     Shortcuts = RecoverManagedShortcuts(),
                 },
             ],
-        };
+        });
     }
 
     public void Save(OrganizerAppState state)
     {
         AppPaths.EnsureCreated();
-        state.SchemaVersion = 2;
+        state.SchemaVersion = 3;
         var temporaryPath = AppPaths.StateFile + ".tmp";
         var json = JsonSerializer.Serialize(state, JsonOptions);
         File.WriteAllText(temporaryPath, json);
@@ -99,6 +99,7 @@ public sealed class StateStore
 
             return new OrganizerAppState
             {
+                SchemaVersion = 1,
                 StartWithWindows = legacy.StartWithWindows,
                 Folders =
                 [
@@ -132,9 +133,32 @@ public sealed class StateStore
         }
     }
 
+    private OrganizerAppState FinalizeLoadedState(OrganizerAppState state)
+    {
+        var requiresMigration = LegacyDesktopMigration.RequiresMigration(state);
+        state = Normalize(state);
+        if (!requiresMigration)
+        {
+            return state;
+        }
+
+        var transaction = LegacyDesktopMigration.Begin(state);
+        try
+        {
+            Save(state);
+            transaction.Commit();
+            return state;
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
+        }
+    }
+
     private static OrganizerAppState Normalize(OrganizerAppState state)
     {
-        state.SchemaVersion = 2;
+        state.SchemaVersion = 3;
         state.Folders ??= [];
         state.Appearance ??= new OrganizerAppearanceState();
         state.Appearance.BackgroundOpacity = Math.Clamp(
@@ -228,12 +252,12 @@ public sealed class StateStore
     {
         try
         {
-            if (!Directory.Exists(AppPaths.ManagedShortcutsDirectory))
+            if (!Directory.Exists(AppPaths.LegacyManagedShortcutsDirectory))
             {
                 return [];
             }
 
-            return Directory.EnumerateFiles(AppPaths.ManagedShortcutsDirectory)
+            return Directory.EnumerateFiles(AppPaths.LegacyManagedShortcutsDirectory)
                 .Where(ShortcutService.IsSupportedPath)
                 .Select((path, index) => new ShortcutItem
                 {
