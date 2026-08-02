@@ -175,6 +175,12 @@
                                     <TranslateTransform x:Name="TileTranslate" Y="0" />
                                 </TransformGroup>
                             </Grid.RenderTransform>
+                            <Border x:Name="MarqueeSelection"
+                                    Margin="4"
+                                    Background="#244887DC"
+                                    CornerRadius="6"
+                                    Opacity="0"
+                                    IsHitTestVisible="False" />
                             <ContentPresenter HorizontalAlignment="Stretch"
                                               VerticalAlignment="Stretch" />
                         </Grid>
@@ -182,6 +188,9 @@
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="IconRoot" Property="Opacity" Value="0.4" />
                             </Trigger>
+                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                <Setter TargetName="MarqueeSelection" Property="Opacity" Value="1" />
+                            </DataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>

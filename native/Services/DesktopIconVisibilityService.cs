@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows.Threading;
+using Microsoft.Win32;
 
 namespace YitDesktopFold.Native.Services;
 
@@ -12,6 +13,9 @@ public sealed class DesktopIconVisibilityService : IDisposable
 {
     private const int SwHide = 0;
     private const int SwShowNoActivate = 4;
+    private const string OwnershipProperty = "YitDesktopFold.IconViewHidden";
+    private const string ExplorerAdvancedKey =
+        @"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
     private readonly DispatcherTimer _recoveryTimer;
     private readonly Dictionary<IntPtr, bool> _originalVisibility = [];
     private bool _disposed;
@@ -44,7 +48,11 @@ public sealed class DesktopIconVisibilityService : IDisposable
 
         if (!_originalVisibility.ContainsKey(listView))
         {
-            _originalVisibility[listView] = IsWindowVisible(listView);
+            _originalVisibility[listView] =
+                IsWindowVisible(listView) ||
+                GetProp(listView, OwnershipProperty) != IntPtr.Zero ||
+                ExplorerSettingsShowDesktopIcons();
+            _ = SetProp(listView, OwnershipProperty, new IntPtr(1));
         }
 
         if (IsWindowVisible(listView))
@@ -92,13 +100,32 @@ public sealed class DesktopIconVisibilityService : IDisposable
         _recoveryTimer.Tick -= RecoveryTimer_Tick;
         foreach (var (window, wasVisible) in _originalVisibility)
         {
-            if (wasVisible && IsWindow(window))
+            if (!IsWindow(window))
+            {
+                continue;
+            }
+
+            _ = RemoveProp(window, OwnershipProperty);
+            if (wasVisible)
             {
                 _ = ShowWindow(window, SwShowNoActivate);
             }
         }
 
         _originalVisibility.Clear();
+    }
+
+    private static bool ExplorerSettingsShowDesktopIcons()
+    {
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(ExplorerAdvancedKey, writable: false);
+            return key?.GetValue("HideIcons") is not int hidden || hidden == 0;
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     [DllImport("user32.dll")]
@@ -122,4 +149,14 @@ public sealed class DesktopIconVisibilityService : IDisposable
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(IntPtr window, int command);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetProp(IntPtr window, string name, IntPtr data);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr GetProp(IntPtr window, string name);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr RemoveProp(IntPtr window, string name);
 }

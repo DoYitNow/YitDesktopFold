@@ -11,6 +11,7 @@ public sealed class ShortcutItem : INotifyPropertyChanged
     private string _name = string.Empty;
     private string _launchPath = string.Empty;
     private string _desktopIdentity = string.Empty;
+    private bool _isSelected;
 
     public Guid Id { get; set; } = Guid.NewGuid();
 
@@ -73,6 +74,22 @@ public sealed class ShortcutItem : INotifyPropertyChanged
     public bool WasMovedFromDesktop { get; set; }
 
     public int AccentIndex { get; set; }
+
+    [JsonIgnore]
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set
+        {
+            if (_isSelected == value)
+            {
+                return;
+            }
+
+            _isSelected = value;
+            OnPropertyChanged();
+        }
+    }
 
     [JsonIgnore]
     public ImageSource? Icon

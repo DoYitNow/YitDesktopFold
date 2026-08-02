@@ -203,6 +203,7 @@ internal static class Program
                             Name = "测试",
                             LaunchPath = "C:\\Windows\\explorer.exe",
                             AccentIndex = 3,
+                            IsSelected = true,
                         },
                     ],
                 },
@@ -227,6 +228,8 @@ internal static class Program
         Assert(loaded.Folders[0].Id == firstFolderId && loaded.Folders[1].Id == secondFolderId,
             "Stable folder IDs did not round-trip.");
         Assert(loaded.Folders[0].Shortcuts.Count == 1, "Folder shortcut count did not round-trip.");
+        Assert(!loaded.Folders[0].Shortcuts[0].IsSelected,
+            "Transient marquee selection was incorrectly persisted.");
         Assert(loaded.Folders[0].ShowName && !loaded.Folders[1].ShowName,
             "Independent folder name visibility did not round-trip.");
         Assert(loaded.Folders[0].ShowIconNames && !loaded.Folders[1].ShowIconNames,

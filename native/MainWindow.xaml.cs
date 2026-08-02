@@ -133,6 +133,31 @@ public partial class MainWindow : Window
         _ = LoadMissingIconsAsync(Items);
     }
 
+    public void ApplyMarqueeSelection(Rect screenBounds)
+    {
+        if (!IsVisible || _isOrganizerHidden)
+        {
+            return;
+        }
+
+        foreach (var item in Items)
+        {
+            if (ShortcutItems.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container ||
+                !container.IsVisible || container.ActualWidth <= 0 || container.ActualHeight <= 0)
+            {
+                continue;
+            }
+
+            var topLeft = container.PointToScreen(new Point(0, 0));
+            var bottomRight = container.PointToScreen(new Point(container.ActualWidth, container.ActualHeight));
+            var itemBounds = new Rect(topLeft, bottomRight);
+            if (screenBounds.IntersectsWith(itemBounds))
+            {
+                item.IsSelected = true;
+            }
+        }
+    }
+
     private bool EffectiveIconsOnly =>
         _displayPreviewActive ? _previewIconsOnly : _folderState.IconsOnly;
 
