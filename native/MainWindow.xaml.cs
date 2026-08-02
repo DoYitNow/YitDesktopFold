@@ -133,7 +133,7 @@ public partial class MainWindow : Window
         _ = LoadMissingIconsAsync(Items);
     }
 
-    public void ApplyMarqueeSelection(Rect screenBounds)
+    public void CollectMarqueeIntersections(Rect screenBounds, ISet<string> intersections)
     {
         if (!IsVisible || _isOrganizerHidden)
         {
@@ -153,7 +153,7 @@ public partial class MainWindow : Window
             var itemBounds = new Rect(topLeft, bottomRight);
             if (screenBounds.IntersectsWith(itemBounds))
             {
-                item.IsSelected = true;
+                intersections.Add(item.DesktopIdentity);
             }
         }
     }

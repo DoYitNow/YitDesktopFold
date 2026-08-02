@@ -15,8 +15,8 @@ public partial class App : Application
     private readonly ShellIconService _iconService = new();
     private readonly List<MainWindow> _windows = [];
     private DesktopCatalogService? _desktopCatalog;
-    private DesktopIconVisibilityService? _desktopIconVisibility;
     private DesktopMarqueeSelectionService? _desktopMarqueeSelection;
+    private HashSet<string> _marqueeSelectionBaseline = new(StringComparer.OrdinalIgnoreCase);
     private Mutex? _instanceMutex;
     private EventWaitHandle? _showRequestEvent;
     private RegisteredWaitHandle? _showRequestRegistration;
@@ -106,8 +106,9 @@ public partial class App : Application
             executeOnlyOnce: false);
 
         CreateTrayIcon();
-        _desktopIconVisibility = new DesktopIconVisibilityService();
         _desktopMarqueeSelection = new DesktopMarqueeSelectionService();
+        _desktopMarqueeSelection.SelectionStarted += DesktopMarquee_SelectionStarted;
+        _desktopMarqueeSelection.SelectionChanged += DesktopMarquee_SelectionChanged;
         _desktopMarqueeSelection.SelectionCompleted += DesktopMarquee_SelectionCompleted;
         _desktopMarqueeSelection.ClearRequested += DesktopMarquee_ClearRequested;
         _keyboardHotKey = new GlobalHotKeyService();
@@ -695,13 +696,13 @@ public partial class App : Application
         _saveTimer?.Stop();
         if (_desktopMarqueeSelection is not null)
         {
+            _desktopMarqueeSelection.SelectionStarted -= DesktopMarquee_SelectionStarted;
+            _desktopMarqueeSelection.SelectionChanged -= DesktopMarquee_SelectionChanged;
             _desktopMarqueeSelection.SelectionCompleted -= DesktopMarquee_SelectionCompleted;
             _desktopMarqueeSelection.ClearRequested -= DesktopMarquee_ClearRequested;
             _desktopMarqueeSelection.Dispose();
             _desktopMarqueeSelection = null;
         }
-        _desktopIconVisibility?.Dispose();
-        _desktopIconVisibility = null;
         if (_desktopCatalog is not null)
         {
             _desktopCatalog.CatalogChanged -= DesktopCatalog_CatalogChanged;
@@ -742,20 +743,50 @@ public partial class App : Application
         Dispatcher.BeginInvoke(RefreshDesktopCatalog, DispatcherPriority.Background);
     }
 
-    private void DesktopMarquee_SelectionCompleted(object? sender, DesktopMarqueeEventArgs e)
+    private void DesktopMarquee_SelectionStarted(object? sender, DesktopMarqueeStartedEventArgs e)
     {
+        _marqueeSelectionBaseline = e.Additive
+            ? _state.Folders
+                .SelectMany(folder => folder.Shortcuts)
+                .Where(item => item.IsSelected)
+                .Select(item => item.DesktopIdentity)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!e.Additive)
         {
             ClearDesktopSelection();
         }
+    }
 
+    private void DesktopMarquee_SelectionChanged(object? sender, DesktopMarqueeEventArgs e) =>
+        ApplyDesktopMarqueeSelection(e.ScreenBounds);
+
+    private void DesktopMarquee_SelectionCompleted(object? sender, DesktopMarqueeEventArgs e)
+    {
+        ApplyDesktopMarqueeSelection(e.ScreenBounds);
+        _marqueeSelectionBaseline.Clear();
+    }
+
+    private void ApplyDesktopMarqueeSelection(Rect screenBounds)
+    {
+        var intersections = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var window in _windows)
         {
-            window.ApplyMarqueeSelection(e.ScreenBounds);
+            window.CollectMarqueeIntersections(screenBounds, intersections);
+        }
+
+        foreach (var item in _state.Folders.SelectMany(folder => folder.Shortcuts))
+        {
+            item.IsSelected = _marqueeSelectionBaseline.Contains(item.DesktopIdentity) ||
+                              intersections.Contains(item.DesktopIdentity);
         }
     }
 
-    private void DesktopMarquee_ClearRequested(object? sender, EventArgs e) => ClearDesktopSelection();
+    private void DesktopMarquee_ClearRequested(object? sender, EventArgs e)
+    {
+        _marqueeSelectionBaseline.Clear();
+        ClearDesktopSelection();
+    }
 
     private void ClearDesktopSelection()
     {
