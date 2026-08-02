@@ -13,6 +13,7 @@ public partial class App : Application
     private const string ShowRequestEventName = @"Local\YitDesktopFold.Native.ShowRequest";
     private readonly StateStore _stateStore = new();
     private readonly ShellIconService _iconService = new();
+    private readonly DesktopNativeVisibilityService _nativeVisibility = new();
     private readonly List<MainWindow> _windows = [];
     private DesktopCatalogService? _desktopCatalog;
     private DesktopMarqueeSelectionService? _desktopMarqueeSelection;
@@ -68,7 +69,9 @@ public partial class App : Application
         }
 
         _desktopCatalog = new DesktopCatalogService();
-        if (_desktopCatalog.Reconcile(_state))
+        var catalogChanged = _desktopCatalog.Reconcile(_state);
+        var visibilityChanged = _nativeVisibility.Synchronize(_state);
+        if (catalogChanged || visibilityChanged)
         {
             _stateStore.Save(_state);
         }
@@ -168,21 +171,20 @@ public partial class App : Application
         }
 
         window.CaptureState();
-        var fallbackFolder = _state.Folders.First(folder => folder.Id != window.FolderState.Id);
-        var fallbackIdentities = fallbackFolder.Shortcuts
-            .Select(item => item.DesktopIdentity)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var item in window.FolderState.Shortcuts)
-        {
-            if (fallbackIdentities.Add(item.DesktopIdentity))
-            {
-                fallbackFolder.Shortcuts.Add(item);
-            }
-        }
-
+        var unassignedItems = window.FolderState.Shortcuts.ToArray();
         _windows.Remove(window);
         _state.Folders.Remove(window.FolderState);
-        FindWindow(fallbackFolder.Id)?.SynchronizeItemsFromState();
+        foreach (var item in unassignedItems)
+        {
+            try
+            {
+                _nativeVisibility.ShowUnassignedItem(item);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // The real item remains safe in Desktop; Explorer may require a manual refresh.
+            }
+        }
         _iconService.RetainOnly(_state.Folders.SelectMany(folder => folder.Shortcuts).Select(item => item.LaunchPath));
         _lastActiveWindow = _windows.LastOrDefault();
         MainWindow = _windows[0];
@@ -473,15 +475,43 @@ public partial class App : Application
         return true;
     }
 
-    public bool MoveDesktopItemToDefault(Guid sourceFolderId, string desktopIdentity)
+    public int MoveDesktopItemsToDesktop(Guid sourceFolderId, string desktopIdentity)
     {
-        var defaultFolder = _state.Folders[0];
-        if (defaultFolder.Id == sourceFolderId)
+        var source = _state.Folders.FirstOrDefault(folder => folder.Id == sourceFolderId);
+        var primaryItem = source?.Shortcuts.FirstOrDefault(candidate => string.Equals(
+            candidate.DesktopIdentity,
+            desktopIdentity,
+            StringComparison.OrdinalIgnoreCase));
+        if (source is null || primaryItem is null)
         {
-            return false;
+            return 0;
         }
 
-        return MoveDesktopItem(sourceFolderId, defaultFolder.Id, desktopIdentity);
+        var items = primaryItem.IsSelected
+            ? source.Shortcuts.Where(item => item.IsSelected).ToArray()
+            : [primaryItem];
+        var restored = 0;
+        foreach (var item in items)
+        {
+            try
+            {
+                _nativeVisibility.ShowUnassignedItem(item);
+                source.Shortcuts.Remove(item);
+                _iconService.Forget(item.LaunchPath);
+                restored++;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Keep an item assigned if Explorer visibility could not be restored.
+            }
+        }
+
+        FindWindow(sourceFolderId)?.SynchronizeItemsFromState();
+        if (restored > 0)
+        {
+            QueueSave();
+        }
+        return restored;
     }
 
     public int AssignDesktopItems(Guid targetFolderId, IEnumerable<string> paths)
@@ -516,6 +546,17 @@ public partial class App : Application
             }
 
             var item = _desktopCatalog.CreateReference(path, target.Shortcuts.Count);
+            try
+            {
+                if (!_nativeVisibility.HideAssignedItem(item))
+                {
+                    continue;
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
             target.Shortcuts.Add(item);
             assigned++;
         }
@@ -527,7 +568,14 @@ public partial class App : Application
 
     public void RefreshDesktopCatalog()
     {
-        if (_desktopCatalog?.Reconcile(_state) != true)
+        if (_desktopCatalog is null)
+        {
+            return;
+        }
+
+        var catalogChanged = _desktopCatalog.Reconcile(_state);
+        var visibilityChanged = _nativeVisibility.Synchronize(_state);
+        if (!catalogChanged && !visibilityChanged)
         {
             return;
         }
@@ -694,6 +742,17 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _saveTimer?.Stop();
+        foreach (var item in _state.Folders.SelectMany(folder => folder.Shortcuts))
+        {
+            try
+            {
+                _nativeVisibility.ShowUnassignedItem(item);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Classification remains persisted and will be reconciled next launch.
+            }
+        }
         if (_desktopMarqueeSelection is not null)
         {
             _desktopMarqueeSelection.SelectionStarted -= DesktopMarquee_SelectionStarted;

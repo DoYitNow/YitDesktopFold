@@ -73,6 +73,9 @@ public sealed class ShortcutItem : INotifyPropertyChanged
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool WasMovedFromDesktop { get; set; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool NativeVisibilityManaged { get; set; }
+
     public int AccentIndex { get; set; }
 
     [JsonIgnore]

@@ -4,7 +4,7 @@ namespace YitDesktopFold.Native.Services;
 
 /// <summary>
 /// One-time schema-v2 recovery. Items previously moved into AppData are put
-/// back on the real user Desktop before schema-v3 metadata is committed.
+/// back on the real user Desktop before current metadata is committed.
 /// </summary>
 public static class LegacyDesktopMigration
 {
@@ -57,7 +57,7 @@ public static class LegacyDesktopMigration
                 UpdateReference(item, destination);
             }
 
-            state.SchemaVersion = 3;
+            state.SchemaVersion = 4;
             return transaction;
         }
         catch

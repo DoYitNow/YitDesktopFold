@@ -84,7 +84,9 @@ public sealed class DesktopCatalogService : IDisposable
                     byPath.TryGetValue(NormalizePath(item.LaunchPath), out entry);
                 }
 
-                if (entry is null || !claimed.Add(entry.Identity))
+                if (entry is null ||
+                    DesktopShellItemService.IsShellNamespacePath(entry.Path) ||
+                    !claimed.Add(entry.Identity))
                 {
                     folder.Shortcuts.RemoveAt(index);
                     changed = true;
@@ -93,18 +95,6 @@ public sealed class DesktopCatalogService : IDisposable
 
                 changed |= UpdateReference(item, entry);
             }
-        }
-
-        var defaultFolder = state.Folders[0];
-        foreach (var entry in snapshot)
-        {
-            if (!claimed.Add(entry.Identity))
-            {
-                continue;
-            }
-
-            defaultFolder.Shortcuts.Add(CreateReference(entry, defaultFolder.Shortcuts.Count));
-            changed = true;
         }
 
         return changed;

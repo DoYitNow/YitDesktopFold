@@ -4,7 +4,7 @@ namespace YitDesktopFold.Native.Models;
 
 public sealed class OrganizerAppState
 {
-    public int SchemaVersion { get; set; } = 3;
+    public int SchemaVersion { get; set; } = 4;
 
     public bool StartWithWindows { get; set; }
 

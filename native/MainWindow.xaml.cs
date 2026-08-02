@@ -637,13 +637,14 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (AppHost.MoveDesktopItemToDefault(_folderState.Id, item.DesktopIdentity))
+        var restored = AppHost.MoveDesktopItemsToDesktop(_folderState.Id, item.DesktopIdentity);
+        if (restored > 0)
         {
-            ShowToast("已移至默认整理块");
+            ShowToast(restored == 1 ? "已移到桌面" : $"已将 {restored} 个项目移到桌面");
         }
         else
         {
-            ShowToast("该项目已在默认整理块中");
+            ShowToast("暂时无法恢复桌面显示");
         }
     }
 
@@ -1457,7 +1458,7 @@ public partial class MainWindow : Window
 
         var message = Items.Count == 0
             ? $"删除“{_folderState.Name}”？"
-            : $"删除“{_folderState.Name}”？其中 {Items.Count} 个桌面项目会归入默认整理块，真实文件不会移动。";
+            : $"删除“{_folderState.Name}”？其中 {Items.Count} 个项目会恢复到原生桌面，真实文件不会移动。";
         var choice = await ShowChoiceDialogAsync(
             "删除整理块",
             message,

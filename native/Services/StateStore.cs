@@ -58,7 +58,7 @@ public sealed class StateStore
     public void Save(OrganizerAppState state)
     {
         AppPaths.EnsureCreated();
-        state.SchemaVersion = 3;
+        state.SchemaVersion = 4;
         var temporaryPath = AppPaths.StateFile + ".tmp";
         var json = JsonSerializer.Serialize(state, JsonOptions);
         File.WriteAllText(temporaryPath, json);
@@ -158,7 +158,7 @@ public sealed class StateStore
 
     private static OrganizerAppState Normalize(OrganizerAppState state)
     {
-        state.SchemaVersion = 3;
+        state.SchemaVersion = 4;
         state.Folders ??= [];
         state.Appearance ??= new OrganizerAppearanceState();
         state.Appearance.BackgroundOpacity = Math.Clamp(

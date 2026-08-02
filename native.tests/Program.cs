@@ -78,16 +78,23 @@ internal static class Program
         {
             Folders = [new OrganizerFolderState { Name = "Default" }, secondFolder],
         };
-        Assert(catalog.Reconcile(state), "Initial Desktop catalog did not populate organizer metadata.");
-        Assert(state.Folders[0].Shortcuts.Count == 2, "User and Public Desktop items were not mirrored.");
+        Assert(!catalog.Reconcile(state), "Unassigned Desktop items were unexpectedly auto-classified.");
+        Assert(state.Folders.All(folder => folder.Shortcuts.Count == 0),
+            "The organizer library must remain explicit rather than mirroring every Desktop item.");
         Assert(!state.Folders.SelectMany(folder => folder.Shortcuts)
                 .Any(item => string.Equals(item.LaunchPath, outsideItem, StringComparison.OrdinalIgnoreCase)),
             "An item outside the Desktop roots was incorrectly cataloged.");
 
-        var classified = state.Folders[0].Shortcuts.Single(item => item.LaunchPath == userItem);
-        state.Folders[0].Shortcuts.Remove(classified);
+        var classified = catalog.CreateReference(userItem);
         secondFolder.Shortcuts.Add(classified);
+        var visibility = new DesktopNativeVisibilityService();
+        Assert(visibility.HideAssignedItem(classified), "Assigned Desktop item could not be suppressed natively.");
         Assert(File.Exists(userItem), "Metadata-only classification moved or deleted the real Desktop item.");
+        Assert((File.GetAttributes(userItem) & FileAttributes.Hidden) != 0 &&
+               classified.NativeVisibilityManaged,
+            "Assigned item remained duplicated in the native Desktop view.");
+        Assert((File.GetAttributes(publicItem) & FileAttributes.Hidden) == 0,
+            "An unassigned Desktop item lost its native visibility.");
         Assert(!Directory.Exists(AppPaths.LegacyManagedShortcutsDirectory),
             "Normal classification recreated the legacy managed-storage directory.");
 
@@ -99,10 +106,23 @@ internal static class Program
                secondFolder.Shortcuts.Single().DesktopIdentity == identityBeforeRename,
             "Stable identity did not preserve classification across a rename.");
 
-        File.Delete(publicItem);
-        Assert(catalog.Reconcile(state), "A deleted Desktop item was not removed from metadata.");
-        Assert(state.Folders.SelectMany(folder => folder.Shortcuts).Count() == 1,
-            "Deleted Desktop metadata remained visible.");
+        secondFolder.Shortcuts.Remove(classified);
+        visibility.ShowUnassignedItem(classified);
+        Assert((File.GetAttributes(renamedItem) & FileAttributes.Hidden) == 0 &&
+               !classified.NativeVisibilityManaged,
+            "Moving an organizer item back to Desktop did not restore native visibility.");
+        Assert(!catalog.Reconcile(state) && state.Folders.All(folder => folder.Shortcuts.Count == 0),
+            "Unassigned items were re-added to the organizer during reconciliation.");
+
+        var originallyHiddenPath = Path.Combine(desktopRoot, "Already hidden.txt");
+        File.WriteAllText(originallyHiddenPath, "hidden");
+        File.SetAttributes(originallyHiddenPath, FileAttributes.Hidden);
+        var originallyHidden = catalog.CreateReference(originallyHiddenPath);
+        Assert(visibility.HideAssignedItem(originallyHidden) && !originallyHidden.NativeVisibilityManaged,
+            "The organizer claimed ownership of a pre-existing Hidden attribute.");
+        visibility.ShowUnassignedItem(originallyHidden);
+        Assert((File.GetAttributes(originallyHiddenPath) & FileAttributes.Hidden) != 0,
+            "Unassigning changed an item's original Hidden state.");
     }
 
     private static void TestLegacyManagedShortcutMigration(string desktopRoot)
@@ -136,12 +156,12 @@ internal static class Program
         new StateStore().Save(state);
         transaction.Commit();
         var migrated = state.Folders[0].Shortcuts[0];
-        Assert(state.SchemaVersion == 3 && File.Exists(migrated.LaunchPath),
+        Assert(state.SchemaVersion == 4 && File.Exists(migrated.LaunchPath),
             "Legacy managed shortcut was not restored to the real Desktop.");
         Assert(AppPaths.IsDirectDesktopItem(migrated.LaunchPath) && !File.Exists(managedPath),
             "Legacy shortcut remained in application-managed storage.");
         Assert(!migrated.IsManaged && !migrated.WasMovedFromDesktop && migrated.OriginalPath is null,
-            "Legacy storage flags survived schema-v3 migration.");
+            "Legacy storage flags survived current-schema migration.");
 
         var rollbackPath = Path.Combine(AppPaths.LegacyManagedShortcutsDirectory, "Rollback.url");
         File.WriteAllText(rollbackPath, "[InternetShortcut]\nURL=https://rollback.example/\n");
@@ -204,6 +224,7 @@ internal static class Program
                             LaunchPath = "C:\\Windows\\explorer.exe",
                             AccentIndex = 3,
                             IsSelected = true,
+                            NativeVisibilityManaged = true,
                         },
                     ],
                 },
@@ -230,6 +251,8 @@ internal static class Program
         Assert(loaded.Folders[0].Shortcuts.Count == 1, "Folder shortcut count did not round-trip.");
         Assert(!loaded.Folders[0].Shortcuts[0].IsSelected,
             "Transient marquee selection was incorrectly persisted.");
+        Assert(loaded.Folders[0].Shortcuts[0].NativeVisibilityManaged,
+            "Selective native-visibility ownership did not round-trip.");
         Assert(loaded.Folders[0].ShowName && !loaded.Folders[1].ShowName,
             "Independent folder name visibility did not round-trip.");
         Assert(loaded.Folders[0].ShowIconNames && !loaded.Folders[1].ShowIconNames,
@@ -315,8 +338,8 @@ internal static class Program
             """);
         File.Delete(AppPaths.BackupStateFile);
         var migrated = store.Load();
-        Assert(migrated.SchemaVersion == 3 && migrated.Folders.Count == 1,
-            "Legacy state did not migrate to one schema-v3 folder.");
+        Assert(migrated.SchemaVersion == 4 && migrated.Folders.Count == 1,
+            "Legacy state did not migrate to one schema-v4 folder.");
         Assert(migrated.Folders[0].Left == 72 && migrated.Folders[0].Shortcuts.Count == 1,
             "Legacy placement or shortcuts were not preserved.");
         Assert(!migrated.Folders[0].ShowName &&
