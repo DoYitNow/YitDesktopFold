@@ -21,6 +21,16 @@ public static class DesktopDropTargetService
         }
 
         screenPoint = new Point(cursorPoint.X, cursorPoint.Y);
+        return IsExplorerDesktopPoint(screenPoint);
+    }
+
+    public static bool IsExplorerDesktopPoint(Point screenPoint)
+    {
+        var cursorPoint = new NativePoint
+        {
+            X = (int)Math.Round(screenPoint.X),
+            Y = (int)Math.Round(screenPoint.Y),
+        };
         var window = WindowFromPoint(cursorPoint);
         if (window == IntPtr.Zero)
         {

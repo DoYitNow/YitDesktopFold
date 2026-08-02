@@ -31,6 +31,7 @@ public partial class App : Application
     private OrganizerAppearanceState? _pendingAppearancePreview;
     private OrganizerSettingsSessionSnapshot? _settingsSession;
     private MainWindow? _lastActiveWindow;
+    private int _nativeVisibilityRestoredForExit;
     private bool _ownsMutex;
 
     public bool IsExiting { get; private set; }
@@ -63,6 +64,7 @@ public partial class App : Application
         base.OnStartup(e);
 
         _state = _stateStore.Load();
+        AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
         if (_state.Folders.Count == 0)
         {
             _state.Folders.Add(new OrganizerFolderState());
@@ -477,6 +479,7 @@ public partial class App : Application
 
     public int MoveDesktopItemsToDesktop(Guid sourceFolderId, string desktopIdentity)
     {
+        _saveTimer?.Stop();
         var source = _state.Folders.FirstOrDefault(folder => folder.Id == sourceFolderId);
         var primaryItem = source?.Shortcuts.FirstOrDefault(candidate => string.Equals(
             candidate.DesktopIdentity,
@@ -501,7 +504,6 @@ public partial class App : Application
         FindWindow(sourceFolderId)?.SynchronizeItemsFromState();
         if (restoredItems.Count > 0)
         {
-            QueueSave();
             Dispatcher.BeginInvoke(
                 () => RestoreNativeDesktopItems(sourceFolderId, restoredItems),
                 DispatcherPriority.Background);
@@ -540,11 +542,15 @@ public partial class App : Application
             FindWindow(sourceFolderId)?.SynchronizeItemsFromState();
         }
 
-        QueueSave();
+        if (!TrySaveAll(out var error))
+        {
+            FindWindow(sourceFolderId)?.ShowSaveFailure(error);
+        }
     }
 
     public int AssignDesktopItems(Guid targetFolderId, IEnumerable<string> paths)
     {
+        _saveTimer?.Stop();
         var target = _state.Folders.FirstOrDefault(folder => folder.Id == targetFolderId);
         if (target is null || _desktopCatalog is null)
         {
@@ -584,7 +590,6 @@ public partial class App : Application
         }
 
         FindWindow(targetFolderId)?.SynchronizeItemsFromState();
-        QueueSave();
         if (pendingVisibility.Count > 0)
         {
             Dispatcher.BeginInvoke(
@@ -602,7 +607,10 @@ public partial class App : Application
             return;
         }
 
-        var failed = new List<ShortcutItem>();
+        var failed = new HashSet<ShortcutItem>();
+        var previousVisibilityState = items.ToDictionary(
+            item => item,
+            item => (item.NativeVisibilityManaged, item.NativeShellVisibilityRestoreValue));
         foreach (var item in items)
         {
             if (!target.Shortcuts.Contains(item))
@@ -612,7 +620,35 @@ public partial class App : Application
 
             try
             {
-                if (!_nativeVisibility.HideAssignedItem(item))
+                if (!_nativeVisibility.PrepareHideAssignedItem(item))
+                {
+                    failed.Add(item);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+            {
+                failed.Add(item);
+            }
+        }
+
+        var prepared = items.Where(item => !failed.Contains(item) && target.Shortcuts.Contains(item)).ToArray();
+        var writeAheadSaved = true;
+        if (prepared.Length > 0 && !TrySaveAll(out var saveError))
+        {
+            writeAheadSaved = false;
+            foreach (var item in prepared)
+            {
+                failed.Add(item);
+            }
+
+            FindWindow(targetFolderId)?.ShowSaveFailure(saveError);
+        }
+
+        foreach (var item in prepared.Where(item => !failed.Contains(item)))
+        {
+            try
+            {
+                if (!_nativeVisibility.ApplyPreparedHideAssignedItem(item))
                 {
                     failed.Add(item);
                 }
@@ -627,13 +663,27 @@ public partial class App : Application
         {
             foreach (var item in failed)
             {
+                try
+                {
+                    _nativeVisibility.ShowUnassignedItem(item);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+                {
+                    // The write-ahead state still retains enough ownership data for recovery.
+                }
+
+                var previous = previousVisibilityState[item];
+                item.NativeVisibilityManaged = previous.NativeVisibilityManaged;
+                item.NativeShellVisibilityRestoreValue = previous.NativeShellVisibilityRestoreValue;
                 target.Shortcuts.Remove(item);
             }
 
             FindWindow(targetFolderId)?.SynchronizeItemsFromState();
+            if (writeAheadSaved && !TrySaveAll(out var rollbackSaveError))
+            {
+                FindWindow(targetFolderId)?.ShowSaveFailure(rollbackSaveError);
+            }
         }
-
-        QueueSave();
     }
 
     public void RefreshDesktopCatalog()
@@ -657,7 +707,6 @@ public partial class App : Application
     public bool TrySaveAll(out string? error)
     {
         _saveTimer?.Stop();
-        _iconService.Clear();
         foreach (var window in _windows)
         {
             window.CaptureState();
@@ -812,17 +861,8 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         _saveTimer?.Stop();
-        foreach (var item in _state.Folders.SelectMany(folder => folder.Shortcuts))
-        {
-            try
-            {
-                _nativeVisibility.ShowUnassignedItem(item);
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
-            {
-                // Classification remains persisted and will be reconciled next launch.
-            }
-        }
+        RestoreNativeVisibilityForExit();
+        AppDomain.CurrentDomain.UnhandledException -= CurrentDomain_UnhandledException;
         if (_desktopMarqueeSelection is not null)
         {
             _desktopMarqueeSelection.SelectionStarted -= DesktopMarquee_SelectionStarted;
@@ -860,6 +900,29 @@ public partial class App : Application
 
         _instanceMutex?.Dispose();
         base.OnExit(e);
+    }
+
+    private void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e) =>
+        RestoreNativeVisibilityForExit();
+
+    private void RestoreNativeVisibilityForExit()
+    {
+        if (Interlocked.Exchange(ref _nativeVisibilityRestoredForExit, 1) != 0)
+        {
+            return;
+        }
+
+        foreach (var item in _state.Folders.SelectMany(folder => folder.Shortcuts))
+        {
+            try
+            {
+                _nativeVisibility.ShowUnassignedItem(item);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+            {
+                // Classification remains persisted and will be reconciled next launch.
+            }
+        }
     }
 
     private void DesktopCatalog_CatalogChanged(object? sender, EventArgs e)

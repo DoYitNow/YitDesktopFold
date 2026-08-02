@@ -14,9 +14,10 @@ public static class DesktopShellItemService
 {
     private const string ShellIdListFormat = "Shell IDList Array";
     private const uint SigdnDesktopAbsoluteParsing = 0x80028000;
-    private const uint ShcneAssocChanged = 0x08000000;
+    private const uint ShcneUpdateDir = 0x00001000;
     private const uint ShcnfIdList = 0x0000;
     private const uint ShcnfFlushNoWait = 0x2000;
+    private const int CsidlDesktop = 0x0000;
     private const string VisibilityKey =
         @"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel";
 
@@ -52,28 +53,80 @@ public static class DesktopShellItemService
 
     public static IReadOnlyList<string> ExtractDesktopDropPaths(IDataObject data)
     {
-        var paths = new List<string>();
-        if (data.GetDataPresent(DataFormats.FileDrop) &&
-            data.GetData(DataFormats.FileDrop) is string[] filePaths)
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
         {
-            paths.AddRange(filePaths);
+            if (data.GetDataPresent(DataFormats.FileDrop) &&
+                data.GetData(DataFormats.FileDrop) is string[] filePaths)
+            {
+                paths.UnionWith(filePaths);
+            }
+        }
+        catch (ExternalException)
+        {
+            // Explorer can withdraw a delayed-rendered format while a drag is ending.
         }
 
-        if (data.GetDataPresent(ShellIdListFormat, autoConvert: false))
+        try
         {
-            var shellData = data.GetData(ShellIdListFormat, autoConvert: false);
-            paths.AddRange(ExtractShellNamespacePaths(shellData));
+            if (data.GetDataPresent(ShellIdListFormat, autoConvert: false))
+            {
+                var shellData = data.GetData(ShellIdListFormat, autoConvert: false);
+                paths.UnionWith(ExtractShellNamespacePaths(shellData));
+            }
+        }
+        catch (ExternalException)
+        {
+            // A stale COM data object is treated as a cancelled drag.
         }
 
         return paths
             .Where(ShortcutService.IsDesktopItem)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
 
-    public static bool HideAssignedItem(ShortcutItem item)
+    public static bool PrepareHideAssignedItem(ShortcutItem item)
     {
         if (!TryGetDefinition(item.LaunchPath, out var definition))
+        {
+            return false;
+        }
+
+        if (item.NativeVisibilityManaged)
+        {
+            return true;
+        }
+
+        using var key = Registry.CurrentUser.OpenSubKey(VisibilityKey, writable: false);
+        var existing = key?.GetValue(definition.ClassId, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+        if (existing is int hidden && hidden != 0)
+        {
+            return true;
+        }
+
+        item.NativeShellVisibilityRestoreValue = existing is int originalValue
+            ? originalValue
+            : null;
+        item.NativeVisibilityManaged = true;
+        return true;
+    }
+
+    public static bool ApplyPreparedHideAssignedItem(ShortcutItem item)
+    {
+        if (!TryGetDefinition(item.LaunchPath, out var definition))
+        {
+            return false;
+        }
+
+        using (var existingKey = Registry.CurrentUser.OpenSubKey(VisibilityKey, writable: false))
+        {
+            if (existingKey?.GetValue(definition.ClassId) is int hidden && hidden != 0)
+            {
+                return true;
+            }
+        }
+
+        if (!item.NativeVisibilityManaged)
         {
             return false;
         }
@@ -84,21 +137,7 @@ public static class DesktopShellItemService
             return false;
         }
 
-        var existing = key.GetValue(definition.ClassId, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
-        if (!item.NativeVisibilityManaged && existing is int hidden && hidden != 0)
-        {
-            return true;
-        }
-
-        if (!item.NativeVisibilityManaged)
-        {
-            item.NativeShellVisibilityRestoreValue = existing is int originalValue
-                ? originalValue
-                : null;
-        }
-
         key.SetValue(definition.ClassId, 1, RegistryValueKind.DWord);
-        item.NativeVisibilityManaged = true;
         NotifyDesktopChanged();
         return true;
     }
@@ -111,24 +150,42 @@ public static class DesktopShellItemService
             return;
         }
 
-        using var key = Registry.CurrentUser.CreateSubKey(VisibilityKey, writable: true);
-        if (key is null)
+        object? existing;
+        using (var existingKey = Registry.CurrentUser.OpenSubKey(VisibilityKey, writable: false))
         {
-            throw new SecurityException("无法恢复 Shell 桌面图标的可见性。");
+            existing = existingKey?.GetValue(
+                definition.ClassId,
+                null,
+                RegistryValueOptions.DoNotExpandEnvironmentNames);
         }
+        var needsChange = item.NativeShellVisibilityRestoreValue is int originalValue
+            ? existing is not int currentValue || currentValue != originalValue
+            : existing is not null;
 
-        if (item.NativeShellVisibilityRestoreValue is int originalValue)
+        if (needsChange)
         {
-            key.SetValue(definition.ClassId, originalValue, RegistryValueKind.DWord);
-        }
-        else
-        {
-            key.DeleteValue(definition.ClassId, throwOnMissingValue: false);
+            using var key = Registry.CurrentUser.CreateSubKey(VisibilityKey, writable: true);
+            if (key is null)
+            {
+                throw new SecurityException("无法恢复 Shell 桌面图标的可见性。");
+            }
+
+            if (item.NativeShellVisibilityRestoreValue is int restoreValue)
+            {
+                key.SetValue(definition.ClassId, restoreValue, RegistryValueKind.DWord);
+            }
+            else
+            {
+                key.DeleteValue(definition.ClassId, throwOnMissingValue: false);
+            }
         }
 
         item.NativeVisibilityManaged = false;
         item.NativeShellVisibilityRestoreValue = null;
-        NotifyDesktopChanged();
+        if (needsChange)
+        {
+            NotifyDesktopChanged();
+        }
     }
 
     public static IEnumerable<DesktopCatalogEntry> EnumerateVisibleItems()
@@ -282,18 +339,39 @@ public static class DesktopShellItemService
         return 0;
     }
 
-    private static void NotifyDesktopChanged() =>
-        SHChangeNotify(
-            ShcneAssocChanged,
-            ShcnfIdList | ShcnfFlushNoWait,
-            IntPtr.Zero,
-            IntPtr.Zero);
+    private static void NotifyDesktopChanged()
+    {
+        if (SHGetSpecialFolderLocation(IntPtr.Zero, CsidlDesktop, out var desktopPidl) < 0 ||
+            desktopPidl == IntPtr.Zero)
+        {
+            return;
+        }
+
+        try
+        {
+            SHChangeNotify(
+                ShcneUpdateDir,
+                ShcnfIdList | ShcnfFlushNoWait,
+                desktopPidl,
+                IntPtr.Zero);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(desktopPidl);
+        }
+    }
 
     [DllImport("shell32.dll")]
     private static extern int SHGetNameFromIDList(
         IntPtr pidl,
         uint nameType,
         out IntPtr name);
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetSpecialFolderLocation(
+        IntPtr owner,
+        int folder,
+        out IntPtr pidl);
 
     [DllImport("shell32.dll")]
     private static extern void SHChangeNotify(

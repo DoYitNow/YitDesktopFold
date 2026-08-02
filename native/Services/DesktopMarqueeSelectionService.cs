@@ -17,7 +17,6 @@ public sealed class DesktopMarqueeSelectionService : IDisposable
     private const int WmLButtonDown = 0x0201;
     private const int WmLButtonUp = 0x0202;
     private const int VkControl = 0x11;
-    private const uint GaRoot = 2;
     private readonly MouseHookProcedure _hookProcedure;
     private IntPtr _hook;
     private NativePoint _start;
@@ -117,34 +116,7 @@ public sealed class DesktopMarqueeSelectionService : IDisposable
 
     private static bool IsDesktopWallpaperPoint(NativePoint point)
     {
-        var window = WindowFromPoint(point);
-        if (window == IntPtr.Zero)
-        {
-            return false;
-        }
-
-        var root = GetAncestor(window, GaRoot);
-        if (root == IntPtr.Zero)
-        {
-            root = window;
-        }
-
-        _ = GetWindowThreadProcessId(root, out var processId);
-        if (processId == Environment.ProcessId)
-        {
-            return false;
-        }
-
-        var className = new char[64];
-        var length = GetClassName(root, className, className.Length);
-        if (length <= 0)
-        {
-            return false;
-        }
-
-        var name = new string(className, 0, length);
-        if (!string.Equals(name, "Progman", StringComparison.Ordinal) &&
-            !string.Equals(name, "WorkerW", StringComparison.Ordinal))
+        if (!DesktopDropTargetService.IsExplorerDesktopPoint(new Point(point.X, point.Y)))
         {
             return false;
         }
@@ -211,18 +183,6 @@ public sealed class DesktopMarqueeSelectionService : IDisposable
         int code,
         IntPtr message,
         IntPtr data);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr WindowFromPoint(NativePoint point);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetAncestor(IntPtr window, uint flags);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetClassName(IntPtr window, char[] className, int maximumCount);
-
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int virtualKey);

@@ -191,13 +191,6 @@ public sealed class DesktopCatalogService : IDisposable
 
                 try
                 {
-                    var attributes = File.GetAttributes(path);
-                    if ((attributes & FileAttributes.System) != 0 &&
-                        (attributes & FileAttributes.Hidden) != 0)
-                    {
-                        continue;
-                    }
-
                     var identity = DesktopItemIdentityService.GetIdentity(path);
                     if (identities.Add(identity))
                     {
@@ -228,13 +221,11 @@ public sealed class DesktopCatalogService : IDisposable
             var watcher = new FileSystemWatcher(directory)
             {
                 IncludeSubdirectories = false,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName |
-                               NotifyFilters.LastWrite,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName,
                 EnableRaisingEvents = true,
             };
             watcher.Created += Watcher_Changed;
             watcher.Deleted += Watcher_Changed;
-            watcher.Changed += Watcher_Changed;
             watcher.Renamed += Watcher_Changed;
             watcher.Error += Watcher_Error;
             _watchers.Add(watcher);

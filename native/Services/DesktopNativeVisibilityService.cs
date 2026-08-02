@@ -36,9 +36,14 @@ public sealed class DesktopNativeVisibilityService
 
     public bool HideAssignedItem(ShortcutItem item)
     {
+        return PrepareHideAssignedItem(item) && ApplyPreparedHideAssignedItem(item);
+    }
+
+    public bool PrepareHideAssignedItem(ShortcutItem item)
+    {
         if (DesktopShellItemService.IsShellNamespacePath(item.LaunchPath))
         {
-            return DesktopShellItemService.HideAssignedItem(item);
+            return DesktopShellItemService.PrepareHideAssignedItem(item);
         }
 
         if (!File.Exists(item.LaunchPath) && !Directory.Exists(item.LaunchPath))
@@ -52,9 +57,34 @@ public sealed class DesktopNativeVisibilityService
             return true;
         }
 
-        File.SetAttributes(item.LaunchPath, attributes | FileAttributes.Hidden);
-        NotifyShellAttributesChanged(item.LaunchPath);
         item.NativeVisibilityManaged = true;
+        return true;
+    }
+
+    public bool ApplyPreparedHideAssignedItem(ShortcutItem item)
+    {
+        if (DesktopShellItemService.IsShellNamespacePath(item.LaunchPath))
+        {
+            return DesktopShellItemService.ApplyPreparedHideAssignedItem(item);
+        }
+
+        if (!File.Exists(item.LaunchPath) && !Directory.Exists(item.LaunchPath))
+        {
+            return false;
+        }
+
+        var attributes = File.GetAttributes(item.LaunchPath);
+        if (!item.NativeVisibilityManaged)
+        {
+            return (attributes & FileAttributes.Hidden) != 0;
+        }
+
+        if ((attributes & FileAttributes.Hidden) == 0)
+        {
+            File.SetAttributes(item.LaunchPath, attributes | FileAttributes.Hidden);
+            NotifyShellAttributesChanged(item.LaunchPath);
+        }
+
         return true;
     }
 

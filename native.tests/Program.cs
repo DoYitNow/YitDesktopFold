@@ -71,9 +71,13 @@ internal static class Program
         var userItem = Path.Combine(desktopRoot, "OpenAI.url");
         var publicItem = Path.Combine(commonDesktopRoot, "Shared tool.txt");
         var outsideItem = Path.Combine(testRoot, "outside.txt");
+        var extensionlessItem = Path.Combine(desktopRoot, "README");
+        var desktopFolder = Path.Combine(desktopRoot, "Projects");
         File.WriteAllText(userItem, "[InternetShortcut]\nURL=https://openai.com/\n");
         File.WriteAllText(publicItem, "public");
         File.WriteAllText(outsideItem, "outside");
+        File.WriteAllText(extensionlessItem, "extensionless");
+        Directory.CreateDirectory(desktopFolder);
 
         using var catalog = new DesktopCatalogService(watchForChanges: false);
         var secondFolder = new OrganizerFolderState { Name = "Second" };
@@ -87,11 +91,19 @@ internal static class Program
         Assert(!state.Folders.SelectMany(folder => folder.Shortcuts)
                 .Any(item => string.Equals(item.LaunchPath, outsideItem, StringComparison.OrdinalIgnoreCase)),
             "An item outside the Desktop roots was incorrectly cataloged.");
+        Assert(ShortcutService.IsDesktopItem(extensionlessItem) &&
+               ShortcutService.IsDesktopItem(desktopFolder),
+            "An extensionless Desktop file or Desktop folder was rejected.");
 
         var classified = catalog.CreateReference(userItem);
         secondFolder.Shortcuts.Add(classified);
         var visibility = new DesktopNativeVisibilityService();
-        Assert(visibility.HideAssignedItem(classified), "Assigned Desktop item could not be suppressed natively.");
+        Assert(visibility.PrepareHideAssignedItem(classified) &&
+               classified.NativeVisibilityManaged &&
+               (File.GetAttributes(userItem) & FileAttributes.Hidden) == 0,
+            "Native visibility ownership was not recorded before changing Windows state.");
+        Assert(visibility.ApplyPreparedHideAssignedItem(classified),
+            "Assigned Desktop item could not be suppressed natively.");
         Assert(File.Exists(userItem), "Metadata-only classification moved or deleted the real Desktop item.");
         Assert((File.GetAttributes(userItem) & FileAttributes.Hidden) != 0 &&
                classified.NativeVisibilityManaged,
@@ -126,6 +138,16 @@ internal static class Program
         visibility.ShowUnassignedItem(originallyHidden);
         Assert((File.GetAttributes(originallyHiddenPath) & FileAttributes.Hidden) != 0,
             "Unassigning changed an item's original Hidden state.");
+
+        var systemHiddenPath = Path.Combine(desktopRoot, "System hidden item.bin");
+        File.WriteAllText(systemHiddenPath, "system-hidden");
+        File.SetAttributes(systemHiddenPath, FileAttributes.System | FileAttributes.Hidden);
+        var systemHidden = catalog.CreateReference(systemHiddenPath);
+        state.Folders[0].Shortcuts.Add(systemHidden);
+        Assert(!catalog.Reconcile(state) && state.Folders[0].Shortcuts.Contains(systemHidden),
+            "A valid System+Hidden Desktop item was discarded from its explicit classification.");
+        Assert(visibility.HideAssignedItem(systemHidden) && !systemHidden.NativeVisibilityManaged,
+            "The organizer claimed ownership of a System+Hidden item's original visibility.");
     }
 
     private static void TestLegacyManagedShortcutMigration(string desktopRoot)

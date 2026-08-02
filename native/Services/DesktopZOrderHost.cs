@@ -333,6 +333,8 @@ public sealed class DesktopZOrderHost : IDisposable
 
     private static class ForegroundCoordinator
     {
+        private const int ShownDesktopRecoveryIntervalMilliseconds = 250;
+        private const int OrdinaryRecoveryIntervalMilliseconds = 1000;
         private static readonly object SyncRoot = new();
         private static readonly HashSet<DesktopZOrderHost> Hosts = [];
         private static readonly WinEventDelegate ForegroundCallback = OnForegroundChanged;
@@ -525,7 +527,10 @@ public sealed class DesktopZOrderHost : IDisposable
             _showDesktop = showDesktop;
             if (_desktopStateTimer is not null)
             {
-                _desktopStateTimer.Interval = TimeSpan.FromMilliseconds(showDesktop ? 100 : 250);
+                _desktopStateTimer.Interval = TimeSpan.FromMilliseconds(
+                    showDesktop
+                        ? ShownDesktopRecoveryIntervalMilliseconds
+                        : OrdinaryRecoveryIntervalMilliseconds);
             }
             if (showDesktop && desktopIconsHost != IntPtr.Zero && _desktopLayerAnchor is not null)
             {
@@ -589,7 +594,7 @@ public sealed class DesktopZOrderHost : IDisposable
 
             _desktopStateTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
             {
-                Interval = TimeSpan.FromMilliseconds(250),
+                Interval = TimeSpan.FromMilliseconds(OrdinaryRecoveryIntervalMilliseconds),
             };
             _desktopStateTimer.Tick += (_, _) =>
             {

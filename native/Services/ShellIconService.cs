@@ -86,16 +86,6 @@ public sealed class ShellIconService
         }
     }
 
-    public void Clear()
-    {
-        lock (_cacheLock)
-        {
-            _cache.Clear();
-            _cacheNodes.Clear();
-            _cacheOrder.Clear();
-        }
-    }
-
     private void TouchCacheEntry(string path)
     {
         if (!_cacheNodes.TryGetValue(path, out var node) || ReferenceEquals(node, _cacheOrder.Last))
