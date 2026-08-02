@@ -14,7 +14,8 @@ public static class ShortcutService
         (Directory.Exists(path) || File.Exists(path) || DesktopShellItemService.IsShellNamespacePath(path));
 
     public static bool IsDesktopItem(string path) =>
-        IsSupportedPath(path) && AppPaths.IsDirectDesktopItem(path);
+        IsSupportedPath(path) &&
+        (DesktopShellItemService.IsShellNamespacePath(path) || AppPaths.IsDirectDesktopItem(path));
 
     public static void Launch(ShortcutItem item)
     {

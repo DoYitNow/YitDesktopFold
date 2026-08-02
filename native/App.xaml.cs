@@ -180,7 +180,7 @@ public partial class App : Application
             {
                 _nativeVisibility.ShowUnassignedItem(item);
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
             {
                 // The real item remains safe in Desktop; Explorer may require a manual refresh.
             }
@@ -490,28 +490,57 @@ public partial class App : Application
         var items = primaryItem.IsSelected
             ? source.Shortcuts.Where(item => item.IsSelected).ToArray()
             : [primaryItem];
-        var restored = 0;
+        var restoredItems = new List<ShortcutItem>();
         foreach (var item in items)
         {
-            try
-            {
-                _nativeVisibility.ShowUnassignedItem(item);
-                source.Shortcuts.Remove(item);
-                _iconService.Forget(item.LaunchPath);
-                restored++;
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                // Keep an item assigned if Explorer visibility could not be restored.
-            }
+            source.Shortcuts.Remove(item);
+            _iconService.Forget(item.LaunchPath);
+            restoredItems.Add(item);
         }
 
         FindWindow(sourceFolderId)?.SynchronizeItemsFromState();
-        if (restored > 0)
+        if (restoredItems.Count > 0)
         {
             QueueSave();
+            Dispatcher.BeginInvoke(
+                () => RestoreNativeDesktopItems(sourceFolderId, restoredItems),
+                DispatcherPriority.Background);
         }
-        return restored;
+        return restoredItems.Count;
+    }
+
+    private void RestoreNativeDesktopItems(Guid sourceFolderId, IReadOnlyList<ShortcutItem> items)
+    {
+        var source = _state.Folders.FirstOrDefault(folder => folder.Id == sourceFolderId);
+        var failed = new List<ShortcutItem>();
+        foreach (var item in items)
+        {
+            if (_state.Folders.Any(folder => folder.Shortcuts.Any(candidate =>
+                    string.Equals(
+                        candidate.DesktopIdentity,
+                        item.DesktopIdentity,
+                        StringComparison.OrdinalIgnoreCase))))
+            {
+                continue;
+            }
+
+            try
+            {
+                _nativeVisibility.ShowUnassignedItem(item);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+            {
+                failed.Add(item);
+            }
+        }
+
+        if (source is not null && failed.Count > 0)
+        {
+            source.Shortcuts.AddRange(failed);
+            FindWindow(sourceFolderId)?.SynchronizeItemsFromState();
+        }
+
+        QueueSave();
     }
 
     public int AssignDesktopItems(Guid targetFolderId, IEnumerable<string> paths)
@@ -523,9 +552,12 @@ public partial class App : Application
         }
 
         var assigned = 0;
+        var pendingVisibility = new List<ShortcutItem>();
         foreach (var path in paths
                      .Where(ShortcutService.IsDesktopItem)
-                     .Select(Path.GetFullPath)
+                     .Select(path => DesktopShellItemService.IsShellNamespacePath(path)
+                         ? path
+                         : Path.GetFullPath(path))
                      .Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var existing = _state.Folders
@@ -546,24 +578,62 @@ public partial class App : Application
             }
 
             var item = _desktopCatalog.CreateReference(path, target.Shortcuts.Count);
-            try
-            {
-                if (!_nativeVisibility.HideAssignedItem(item))
-                {
-                    continue;
-                }
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                continue;
-            }
             target.Shortcuts.Add(item);
+            pendingVisibility.Add(item);
             assigned++;
         }
 
         FindWindow(targetFolderId)?.SynchronizeItemsFromState();
         QueueSave();
+        if (pendingVisibility.Count > 0)
+        {
+            Dispatcher.BeginInvoke(
+                () => SuppressAssignedDesktopItems(targetFolderId, pendingVisibility),
+                DispatcherPriority.Background);
+        }
         return assigned;
+    }
+
+    private void SuppressAssignedDesktopItems(Guid targetFolderId, IReadOnlyList<ShortcutItem> items)
+    {
+        var target = _state.Folders.FirstOrDefault(folder => folder.Id == targetFolderId);
+        if (target is null)
+        {
+            return;
+        }
+
+        var failed = new List<ShortcutItem>();
+        foreach (var item in items)
+        {
+            if (!target.Shortcuts.Contains(item))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (!_nativeVisibility.HideAssignedItem(item))
+                {
+                    failed.Add(item);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+            {
+                failed.Add(item);
+            }
+        }
+
+        if (failed.Count > 0)
+        {
+            foreach (var item in failed)
+            {
+                target.Shortcuts.Remove(item);
+            }
+
+            FindWindow(targetFolderId)?.SynchronizeItemsFromState();
+        }
+
+        QueueSave();
     }
 
     public void RefreshDesktopCatalog()
@@ -748,7 +818,7 @@ public partial class App : Application
             {
                 _nativeVisibility.ShowUnassignedItem(item);
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
             {
                 // Classification remains persisted and will be reconciled next launch.
             }

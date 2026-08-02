@@ -79,14 +79,19 @@ public sealed class DesktopCatalogService : IDisposable
                     byIdentity.TryGetValue(item.DesktopIdentity, out entry);
                 }
 
+                if (entry is null &&
+                    DesktopShellItemService.IsShellNamespacePath(item.LaunchPath) &&
+                    DesktopShellItemService.TryGetCatalogEntry(item.LaunchPath, out var shellEntry))
+                {
+                    entry = shellEntry;
+                }
+
                 if (entry is null && !string.IsNullOrWhiteSpace(item.LaunchPath))
                 {
                     byPath.TryGetValue(NormalizePath(item.LaunchPath), out entry);
                 }
 
-                if (entry is null ||
-                    DesktopShellItemService.IsShellNamespacePath(entry.Path) ||
-                    !claimed.Add(entry.Identity))
+                if (entry is null || !claimed.Add(entry.Identity))
                 {
                     folder.Shortcuts.RemoveAt(index);
                     changed = true;
@@ -102,6 +107,16 @@ public sealed class DesktopCatalogService : IDisposable
 
     public ShortcutItem CreateReference(string path, int accentIndex = 0)
     {
+        if (DesktopShellItemService.IsShellNamespacePath(path))
+        {
+            if (!DesktopShellItemService.TryGetCatalogEntry(path, out var shellEntry))
+            {
+                throw new InvalidOperationException("这个 Shell 桌面项目暂不受支持。");
+            }
+
+            return CreateReference(shellEntry, accentIndex);
+        }
+
         var fullPath = NormalizePath(path);
         if (!AppPaths.IsDirectDesktopItem(fullPath) || !ShortcutService.IsSupportedPath(fullPath))
         {
@@ -214,7 +229,7 @@ public sealed class DesktopCatalogService : IDisposable
             {
                 IncludeSubdirectories = false,
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName |
-                               NotifyFilters.LastWrite | NotifyFilters.Attributes,
+                               NotifyFilters.LastWrite,
                 EnableRaisingEvents = true,
             };
             watcher.Created += Watcher_Changed;
@@ -252,7 +267,10 @@ public sealed class DesktopCatalogService : IDisposable
         }
     }
 
-    private static string NormalizePath(string path) => Path.GetFullPath(path);
+    private static string NormalizePath(string path) =>
+        DesktopShellItemService.IsShellNamespacePath(path)
+            ? path
+            : Path.GetFullPath(path);
 
     private static string GetDisplayName(string path) => Directory.Exists(path)
         ? new DirectoryInfo(path).Name

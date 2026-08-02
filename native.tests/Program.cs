@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.IO;
+using System.Runtime.InteropServices;
 using YitDesktopFold.Native.Controls;
 using YitDesktopFold.Native.Models;
 using YitDesktopFold.Native.Services;
@@ -25,12 +26,14 @@ internal static class Program
         try
         {
             TestDesktopCatalogClassificationAndSync(testRoot, desktopRoot, commonDesktopRoot);
+            TestShellNamespaceDragClassification();
             TestLegacyManagedShortcutMigration(desktopRoot);
             TestStateRoundTripAndRecovery();
             TestCombinedSettingsDraftIsolation();
             TestFixedLayoutGeometry();
             TestMagneticSnapGeometry();
             Console.WriteLine("PASS: desktop catalog classification, identity sync, and file safety");
+            Console.WriteLine("PASS: Shell IDList drag classification for virtual Desktop icons");
             Console.WriteLine("PASS: legacy managed shortcuts migrate transactionally to Desktop");
             Console.WriteLine("PASS: multi-folder state round-trip/v1 migration/recovery");
             Console.WriteLine("PASS: global appearance draft isolation and normalization");
@@ -187,6 +190,69 @@ internal static class Program
         File.Delete(rollbackPath);
     }
 
+    private static void TestShellNamespaceDragClassification()
+    {
+        const string recycleBinPath = "shell:::{645FF040-5081-101B-9F08-00AA002F954E}";
+        Assert(DesktopShellItemService.TryGetCatalogEntry(recycleBinPath, out var entry) &&
+               entry.DisplayName == "回收站" &&
+               ShortcutService.IsDesktopItem(entry.Path),
+            "Recycle Bin was not recognized as a supported virtual Desktop item.");
+
+        var result = SHParseDisplayName(recycleBinPath, IntPtr.Zero, out var pidl, 0, out _);
+        Assert(result >= 0 && pidl != IntPtr.Zero, "Windows could not create a Recycle Bin PIDL for drag testing.");
+        try
+        {
+            var pidlBytes = ReadPidl(pidl);
+            var cida = new byte[14 + pidlBytes.Length];
+            Buffer.BlockCopy(BitConverter.GetBytes(1u), 0, cida, 0, 4);
+            Buffer.BlockCopy(BitConverter.GetBytes(12u), 0, cida, 4, 4);
+            Buffer.BlockCopy(BitConverter.GetBytes(14u), 0, cida, 8, 4);
+            Buffer.BlockCopy(pidlBytes, 0, cida, 14, pidlBytes.Length);
+
+            var data = new DataObject();
+            data.SetData("Shell IDList Array", new MemoryStream(cida), autoConvert: false);
+            var droppedPaths = DesktopShellItemService.ExtractDesktopDropPaths(data);
+            Assert(droppedPaths.Count == 1 &&
+                   string.Equals(droppedPaths[0], recycleBinPath, StringComparison.OrdinalIgnoreCase),
+                "Recycle Bin CFSTR_SHELLIDLIST/CIDA drag data was not decoded.");
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(pidl);
+        }
+
+        using var catalog = new DesktopCatalogService(watchForChanges: false);
+        var recycleBin = catalog.CreateReference(recycleBinPath);
+        var state = new OrganizerAppState
+        {
+            Folders = [new OrganizerFolderState { Shortcuts = [recycleBin] }],
+        };
+        Assert(!catalog.Reconcile(state) && state.Folders[0].Shortcuts.Count == 1,
+            "A classified virtual Desktop item was discarded after native suppression.");
+    }
+
+    private static byte[] ReadPidl(IntPtr pidl)
+    {
+        var length = 0;
+        while (true)
+        {
+            var itemLength = unchecked((ushort)Marshal.ReadInt16(pidl, length));
+            length += 2;
+            if (itemLength == 0)
+            {
+                break;
+            }
+
+            Assert(itemLength >= 2 && length + itemLength - 2 < 65536,
+                "Shell returned an invalid PIDL.");
+            length += itemLength - 2;
+        }
+
+        var bytes = new byte[length];
+        Marshal.Copy(pidl, bytes, 0, length);
+        return bytes;
+    }
+
     private static void TestStateRoundTripAndRecovery()
     {
         var store = new StateStore();
@@ -225,6 +291,7 @@ internal static class Program
                             AccentIndex = 3,
                             IsSelected = true,
                             NativeVisibilityManaged = true,
+                            NativeShellVisibilityRestoreValue = 0,
                         },
                     ],
                 },
@@ -253,6 +320,8 @@ internal static class Program
             "Transient marquee selection was incorrectly persisted.");
         Assert(loaded.Folders[0].Shortcuts[0].NativeVisibilityManaged,
             "Selective native-visibility ownership did not round-trip.");
+        Assert(loaded.Folders[0].Shortcuts[0].NativeShellVisibilityRestoreValue == 0,
+            "Shell icon visibility restore state did not round-trip.");
         Assert(loaded.Folders[0].ShowName && !loaded.Folders[1].ShowName,
             "Independent folder name visibility did not round-trip.");
         Assert(loaded.Folders[0].ShowIconNames && !loaded.Folders[1].ShowIconNames,
@@ -632,4 +701,12 @@ internal static class Program
             throw new InvalidOperationException($"{message} Expected {expected}, got {actual}.");
         }
     }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SHParseDisplayName(
+        string name,
+        IntPtr bindingContext,
+        out IntPtr pidl,
+        uint attributesIn,
+        out uint attributesOut);
 }

@@ -12,6 +12,7 @@ public sealed class DesktopNativeVisibilityService
 {
     private const uint ShcneAttributes = 0x00000800;
     private const uint ShcnfPathW = 0x0005;
+    private const uint ShcnfFlushNoWait = 0x2000;
 
     public bool Synchronize(OrganizerAppState state)
     {
@@ -24,7 +25,7 @@ public sealed class DesktopNativeVisibilityService
                 HideAssignedItem(item);
                 changed |= wasManaged != item.NativeVisibilityManaged;
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
             {
                 // Public Desktop policy can prevent selective suppression.
             }
@@ -35,6 +36,11 @@ public sealed class DesktopNativeVisibilityService
 
     public bool HideAssignedItem(ShortcutItem item)
     {
+        if (DesktopShellItemService.IsShellNamespacePath(item.LaunchPath))
+        {
+            return DesktopShellItemService.HideAssignedItem(item);
+        }
+
         if (!File.Exists(item.LaunchPath) && !Directory.Exists(item.LaunchPath))
         {
             return false;
@@ -54,6 +60,12 @@ public sealed class DesktopNativeVisibilityService
 
     public void ShowUnassignedItem(ShortcutItem item)
     {
+        if (DesktopShellItemService.IsShellNamespacePath(item.LaunchPath))
+        {
+            DesktopShellItemService.ShowUnassignedItem(item);
+            return;
+        }
+
         if (!item.NativeVisibilityManaged)
         {
             return;
@@ -70,7 +82,7 @@ public sealed class DesktopNativeVisibilityService
     }
 
     private static void NotifyShellAttributesChanged(string path) =>
-        SHChangeNotify(ShcneAttributes, ShcnfPathW, path, IntPtr.Zero);
+        SHChangeNotify(ShcneAttributes, ShcnfPathW | ShcnfFlushNoWait, path, IntPtr.Zero);
 
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern void SHChangeNotify(

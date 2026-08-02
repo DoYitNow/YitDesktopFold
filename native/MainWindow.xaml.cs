@@ -75,6 +75,8 @@ public partial class MainWindow : Window
     private ShortcutItem? _shortcutDragCandidate;
     private bool _shortcutDragCancelled;
     private bool _shortcutDragReleased;
+    private IDataObject? _cachedDesktopDropData;
+    private string[] _cachedDesktopDropPaths = [];
     private bool _suppressNextShortcutClick;
     private bool _synchronizingItems;
 
@@ -529,14 +531,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!e.Data.GetDataPresent(DataFormats.FileDrop))
-        {
-            e.Effects = DragDropEffects.None;
-            e.Handled = true;
-            return;
-        }
-
-        var paths = (string[]?)e.Data.GetData(DataFormats.FileDrop) ?? [];
+        var paths = GetDesktopDropPaths(e.Data);
         e.Effects = paths.Any(ShortcutService.IsDesktopItem)
             ? DragDropEffects.Copy
             : DragDropEffects.None;
@@ -561,7 +556,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        var paths = (string[]?)e.Data.GetData(DataFormats.FileDrop) ?? [];
+        var paths = GetDesktopDropPaths(e.Data);
+        _cachedDesktopDropData = null;
+        _cachedDesktopDropPaths = [];
         await ImportPathsAsync(paths);
     }
 
@@ -589,7 +586,9 @@ public partial class MainWindow : Window
     {
         var paths = sourcePaths
             .Where(ShortcutService.IsDesktopItem)
-            .Select(Path.GetFullPath)
+            .Select(path => DesktopShellItemService.IsShellNamespacePath(path)
+                ? path
+                : Path.GetFullPath(path))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
@@ -603,6 +602,20 @@ public partial class MainWindow : Window
 
         var assigned = AppHost.AssignDesktopItems(_folderState.Id, paths);
         ShowToast($"已归类 {assigned} 个桌面项目");
+    }
+
+    private string[] GetDesktopDropPaths(IDataObject data)
+    {
+        if (ReferenceEquals(_cachedDesktopDropData, data))
+        {
+            return _cachedDesktopDropPaths;
+        }
+
+        _cachedDesktopDropData = data;
+        _cachedDesktopDropPaths = DesktopShellItemService
+            .ExtractDesktopDropPaths(data)
+            .ToArray();
+        return _cachedDesktopDropPaths;
     }
 
     private void Shortcut_Click(object sender, RoutedEventArgs e)

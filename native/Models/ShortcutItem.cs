@@ -76,6 +76,9 @@ public sealed class ShortcutItem : INotifyPropertyChanged
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool NativeVisibilityManaged { get; set; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? NativeShellVisibilityRestoreValue { get; set; }
+
     public int AccentIndex { get; set; }
 
     [JsonIgnore]
