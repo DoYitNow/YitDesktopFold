@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using YitDesktopFold.Native.Models;
 
 namespace YitDesktopFold.Native.Services;
@@ -9,6 +10,9 @@ namespace YitDesktopFold.Native.Services;
 /// </summary>
 public sealed class DesktopNativeVisibilityService
 {
+    private const uint ShcneAttributes = 0x00000800;
+    private const uint ShcnfPathW = 0x0005;
+
     public bool Synchronize(OrganizerAppState state)
     {
         var changed = false;
@@ -43,6 +47,7 @@ public sealed class DesktopNativeVisibilityService
         }
 
         File.SetAttributes(item.LaunchPath, attributes | FileAttributes.Hidden);
+        NotifyShellAttributesChanged(item.LaunchPath);
         item.NativeVisibilityManaged = true;
         return true;
     }
@@ -58,8 +63,19 @@ public sealed class DesktopNativeVisibilityService
         {
             var attributes = File.GetAttributes(item.LaunchPath);
             File.SetAttributes(item.LaunchPath, attributes & ~FileAttributes.Hidden);
+            NotifyShellAttributesChanged(item.LaunchPath);
         }
 
         item.NativeVisibilityManaged = false;
     }
+
+    private static void NotifyShellAttributesChanged(string path) =>
+        SHChangeNotify(ShcneAttributes, ShcnfPathW, path, IntPtr.Zero);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern void SHChangeNotify(
+        uint eventId,
+        uint flags,
+        [MarshalAs(UnmanagedType.LPWStr)] string item1,
+        IntPtr item2);
 }

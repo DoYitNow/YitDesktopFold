@@ -73,6 +73,8 @@ public partial class MainWindow : Window
     private Rect[] _resizeSnapTargets = [];
     private Point _shortcutDragStart;
     private ShortcutItem? _shortcutDragCandidate;
+    private bool _shortcutDragCancelled;
+    private bool _shortcutDragReleased;
     private bool _suppressNextShortcutClick;
     private bool _synchronizingItems;
 
@@ -1101,15 +1103,57 @@ public partial class MainWindow : Window
 
         _shortcutDragCandidate = null;
         _suppressNextShortcutClick = true;
+        _shortcutDragCancelled = false;
+        _shortcutDragReleased = false;
         var data = new DataObject();
         data.SetData(
             DesktopItemDragFormat,
             $"{_folderState.Id:N}|{item.DesktopIdentity}",
             autoConvert: false);
         _ = DragDrop.DoDragDrop(button, data, DragDropEffects.Move);
+
+        if (!_shortcutDragCancelled &&
+            _shortcutDragReleased &&
+            DesktopDropTargetService.TryGetCurrentDesktopPoint(out _))
+        {
+            var restored = AppHost.MoveDesktopItemsToDesktop(_folderState.Id, item.DesktopIdentity);
+            if (restored > 0)
+            {
+                ShowToast(restored == 1 ? "已移到桌面" : $"已将 {restored} 个项目移到桌面");
+            }
+        }
+
         Dispatcher.BeginInvoke(
             () => _suppressNextShortcutClick = false,
             DispatcherPriority.Input);
+    }
+
+    private void ShortcutButton_QueryContinueDrag(object sender, QueryContinueDragEventArgs e)
+    {
+        if (e.EscapePressed)
+        {
+            _shortcutDragCancelled = true;
+            return;
+        }
+
+        if ((e.KeyStates & DragDropKeyStates.LeftMouseButton) == 0)
+        {
+            _shortcutDragReleased = true;
+        }
+    }
+
+    private void ShortcutButton_GiveFeedback(object sender, GiveFeedbackEventArgs e)
+    {
+        if (e.Effects == DragDropEffects.None &&
+            DesktopDropTargetService.TryGetCurrentDesktopPoint(out _))
+        {
+            e.UseDefaultCursors = false;
+            Mouse.SetCursor(Cursors.Hand);
+            e.Handled = true;
+            return;
+        }
+
+        e.UseDefaultCursors = true;
     }
 
     private void ShortcutButton_PreviewMouseUp(object sender, MouseButtonEventArgs e)

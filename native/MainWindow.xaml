@@ -157,6 +157,8 @@
             <EventSetter Event="PreviewMouseMove" Handler="ShortcutButton_PreviewMouseMove" />
             <EventSetter Event="PreviewMouseUp" Handler="ShortcutButton_PreviewMouseUp" />
             <EventSetter Event="LostMouseCapture" Handler="ShortcutButton_LostMouseCapture" />
+            <EventSetter Event="QueryContinueDrag" Handler="ShortcutButton_QueryContinueDrag" />
+            <EventSetter Event="GiveFeedback" Handler="ShortcutButton_GiveFeedback" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Background" Value="Transparent" />
