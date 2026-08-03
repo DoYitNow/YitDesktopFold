@@ -3,7 +3,7 @@
 ## 版本与前置条件
 
 - .NET 8 SDK
-- Node.js 20+
+- Node.js 22.13+（推荐 Node.js 24）
 - Inno Setup 6（`ISCC.exe` 在 `PATH` 或 `%LOCALAPPDATA%\Programs\Inno Setup 6`）
 - GitHub CLI（发布 Release 时使用）
 

@@ -42,7 +42,7 @@ YitDesktopFold 是一个面向 Windows 10/11 的轻量原生桌面整理工具�
 
 ## 开发与验证
 
-需要 [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) 和 Node.js 20+。原生应用位于 `native/`；`src/` 是保留的设计原型及 Sites 交付面。
+需要 [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) 和 Node.js 22.13+（CI 使用 Node.js 24）。原生应用位于 `native/`；`src/` 是保留的设计原型及 Sites 交付面。
 
 ```powershell
 dotnet build .\native\YitDesktopFold.Native.csproj -c Release
