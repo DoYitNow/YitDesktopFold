@@ -12,8 +12,10 @@ coverage/
 .vs/
 
 # Local packaging output
+artifacts/
 release/win-x64/
 release/*.zip
+release/*.exe
 
 # Local runtime / visual review sandboxes
 .desktop-layer-review/

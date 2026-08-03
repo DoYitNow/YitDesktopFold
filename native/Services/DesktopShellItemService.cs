@@ -6,6 +6,16 @@ using YitDesktopFold.Native.Models;
 
 namespace YitDesktopFold.Native.Services;
 
+public enum DesktopShellItemKind
+{
+    None,
+    RecycleBin,
+    ThisPc,
+    UserFiles,
+    Network,
+    ControlPanel,
+}
+
 /// <summary>
 /// Mirrors the standard virtual icons that Explorer can place on the Desktop.
 /// They have no filesystem path but remain launchable Shell namespace items.
@@ -18,6 +28,7 @@ public static class DesktopShellItemService
     private const uint ShcnfIdList = 0x0000;
     private const uint ShcnfFlushNoWait = 0x2000;
     private const int CsidlDesktop = 0x0000;
+    private const uint SherbNoConfirmation = 0x00000001;
     private const string VisibilityKey =
         @"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel";
 
@@ -33,6 +44,60 @@ public static class DesktopShellItemService
     public static bool IsShellNamespacePath(string path) =>
         !string.IsNullOrWhiteSpace(path) &&
         path.StartsWith("shell:::", StringComparison.OrdinalIgnoreCase);
+
+    public static DesktopShellItemKind GetShellItemKind(string path)
+    {
+        if (!IsShellNamespacePath(path))
+        {
+            return DesktopShellItemKind.None;
+        }
+
+        if (path.Contains("{645FF040-5081-101B-9F08-00AA002F954E}", StringComparison.OrdinalIgnoreCase))
+        {
+            return DesktopShellItemKind.RecycleBin;
+        }
+
+        if (path.Contains("{20D04FE0-3AEA-1069-A2D8-08002B30309D}", StringComparison.OrdinalIgnoreCase))
+        {
+            return DesktopShellItemKind.ThisPc;
+        }
+
+        if (path.Contains("{59031A47-3F72-44A7-89C5-5595FE6B30EE}", StringComparison.OrdinalIgnoreCase))
+        {
+            return DesktopShellItemKind.UserFiles;
+        }
+
+        if (path.Contains("{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}", StringComparison.OrdinalIgnoreCase))
+        {
+            return DesktopShellItemKind.Network;
+        }
+
+        return path.Contains("{26EE0668-A00A-44D7-9371-BEB064C98683}", StringComparison.OrdinalIgnoreCase)
+            ? DesktopShellItemKind.ControlPanel
+            : DesktopShellItemKind.None;
+    }
+
+    public static long GetRecycleBinItemCount()
+    {
+        var information = new RecycleBinInformation
+        {
+            Size = Marshal.SizeOf<RecycleBinInformation>(),
+        };
+        return SHQueryRecycleBin(null, ref information) >= 0
+            ? information.ItemCount
+            : -1;
+    }
+
+    public static bool EmptyRecycleBin(IntPtr owner)
+    {
+        if (SHEmptyRecycleBin(owner, null, SherbNoConfirmation) < 0)
+        {
+            return false;
+        }
+
+        NotifyDesktopChanged();
+        return true;
+    }
 
     public static bool TryGetCatalogEntry(string path, out DesktopCatalogEntry entry)
     {
@@ -360,6 +425,25 @@ public static class DesktopShellItemService
             Marshal.FreeCoTaskMem(desktopPidl);
         }
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RecycleBinInformation
+    {
+        public int Size;
+        public long TotalSize;
+        public long ItemCount;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SHQueryRecycleBin(
+        string? rootPath,
+        ref RecycleBinInformation information);
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SHEmptyRecycleBin(
+        IntPtr owner,
+        string? rootPath,
+        uint flags);
 
     [DllImport("shell32.dll")]
     private static extern int SHGetNameFromIDList(

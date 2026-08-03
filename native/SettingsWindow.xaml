@@ -478,6 +478,45 @@
                                FontSize="12"
                                FontWeight="SemiBold"
                                Foreground="#E6E8E9"
+                               Text="应用" />
+                </Grid>
+
+                <Grid Height="46" Margin="2,0">
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock FontSize="11.5"
+                                   Foreground="#C9CCCED1"
+                                   Text="登录 Windows 时启动" />
+                        <TextBlock Margin="0,2,0,0"
+                                   FontSize="10"
+                                   Foreground="#7F898E92"
+                                   Text="保存后写入当前用户启动项" />
+                    </StackPanel>
+                    <StackPanel HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Orientation="Horizontal">
+                        <TextBlock x:Name="StartupStateText"
+                                   Margin="0,0,8,0"
+                                   VerticalAlignment="Center"
+                                   FontSize="11"
+                                   Foreground="#9FA5A9AC" />
+                        <CheckBox x:Name="StartupToggle"
+                                  VerticalAlignment="Center"
+                                  Style="{StaticResource ToggleSwitchStyle}"
+                                  AutomationProperties.Name="登录 Windows 时启动"
+                                  Checked="StartupToggle_Changed"
+                                  Unchecked="StartupToggle_Changed" />
+                    </StackPanel>
+                </Grid>
+
+                <Border Height="1"
+                        Margin="2,4,2,0"
+                        Background="#18FFFFFF" />
+
+                <Grid Height="28" Margin="2,2,2,0">
+                    <TextBlock VerticalAlignment="Center"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Foreground="#E6E8E9"
                                Text="当前整理块" />
                     <TextBlock x:Name="CurrentFolderNameText"
                                Width="210"

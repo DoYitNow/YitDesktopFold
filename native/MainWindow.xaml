@@ -339,10 +339,51 @@
 
         <ContextMenu x:Key="ShortcutContextMenu"
                      Style="{StaticResource DarkContextMenuStyle}"
+                     Opened="ShortcutContextMenu_Opened"
                      DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+            <MenuItem Header="打开"
+                      Style="{StaticResource DarkMenuItemStyle}"
+                      Click="OpenShortcutMenu_Click" />
+            <Separator Tag="item-actions-separator"
+                       Style="{StaticResource DarkSeparatorStyle}" />
+            <MenuItem Header="剪切"
+                      Tag="cut"
+                      Style="{StaticResource DarkMenuItemStyle}"
+                      Click="ShortcutShellVerb_Click" />
+            <MenuItem Header="复制"
+                      Tag="copy"
+                      Style="{StaticResource DarkMenuItemStyle}"
+                      Click="ShortcutShellVerb_Click" />
+            <MenuItem Header="重命名…"
+                      Tag="app-rename"
+                      Style="{StaticResource DarkMenuItemStyle}"
+                      Click="RenameShortcutMenu_Click" />
+            <MenuItem Header="删除"
+                      Tag="delete"
+                      Style="{StaticResource DarkMenuItemStyle}"
+                      Click="ShortcutShellVerb_Click" />
+            <MenuItem Header="清空回收站"
+                      Tag="recycle-empty"
+                      Style="{StaticResource DarkMenuItemStyle}"
+                      Visibility="Collapsed"
+                      Click="EmptyRecycleBin_Click" />
+            <MenuItem Header="管理"
+                      Tag="this-pc-manage"
+                      Style="{StaticResource DarkMenuItemStyle}"
+                      Visibility="Collapsed"
+                      Click="ManageThisPc_Click" />
+            <Separator Style="{StaticResource DarkSeparatorStyle}" />
             <MenuItem Header="移到桌面"
                       Style="{StaticResource DarkMenuItemStyle}"
                       Click="RemoveShortcut_Click" />
+            <MenuItem Header="属性"
+                      Tag="properties"
+                      Style="{StaticResource DarkMenuItemStyle}"
+                      Click="ShortcutShellVerb_Click" />
+            <Separator Style="{StaticResource DarkSeparatorStyle}" />
+            <MenuItem Header="显示更多选项"
+                      Style="{StaticResource DarkMenuItemStyle}"
+                      Click="ShowFullShellMenuAnchored_Click" />
         </ContextMenu>
 
     </Window.Resources>
@@ -379,11 +420,6 @@
                           Style="{StaticResource DarkMenuItemStyle}"
                           Click="OpenDesktopFolder_Click" />
                 <Separator Style="{StaticResource DarkSeparatorStyle}" />
-                <MenuItem x:Name="StartWithWindowsItem"
-                          Header="登录 Windows 时启动"
-                          Style="{StaticResource DarkMenuItemStyle}"
-                          IsCheckable="True"
-                          Click="StartWithWindows_Click" />
                 <MenuItem Header="恢复默认大小"
                           Style="{StaticResource DarkMenuItemStyle}"
                           Click="ResetSize_Click" />

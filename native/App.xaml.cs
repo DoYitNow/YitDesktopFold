@@ -308,7 +308,24 @@ public partial class App : Application
         var previousIconsOnly = target.FolderState.IconsOnly;
         var previousIconLayoutMode = target.FolderState.IconLayoutMode;
         var previousWidth = target.Width;
+        var previousStartWithWindows = StartupService.IsEnabled();
         var snapshot = draft.Copy();
+        try
+        {
+            StartupService.SetEnabled(snapshot.StartWithWindows);
+        }
+        catch (Exception exception) when (exception is
+            IOException or
+            UnauthorizedAccessException or
+            SecurityException or
+            InvalidOperationException or
+            ArgumentException or
+            NotSupportedException)
+        {
+            error = $"无法更改开机启动设置：{exception.Message}";
+            return false;
+        }
+
         CancelPendingAppearanceBroadcast();
         _state.Appearance = snapshot.Appearance.Copy();
         _appearancePreview = null;
@@ -325,6 +342,23 @@ public partial class App : Application
             return true;
         }
 
+        string? startupRollbackError = null;
+        try
+        {
+            StartupService.SetEnabled(previousStartWithWindows);
+        }
+        catch (Exception exception) when (exception is
+            IOException or
+            UnauthorizedAccessException or
+            SecurityException or
+            InvalidOperationException or
+            ArgumentException or
+            NotSupportedException)
+        {
+            startupRollbackError = exception.Message;
+        }
+
+        _state.StartWithWindows = StartupService.IsEnabled();
         _state.Appearance = previousAppearance;
         target.ApplyCommittedDisplayState(
             previousShowFolderName,
@@ -341,6 +375,11 @@ public partial class App : Application
             snapshot.IconsOnly,
             snapshot.IconLayoutMode,
             animate: false);
+        if (startupRollbackError is not null)
+        {
+            error = $"{error} 启动项回滚失败：{startupRollbackError}";
+        }
+
         return false;
     }
 
@@ -368,7 +407,8 @@ public partial class App : Application
             source.FolderState.ShowName,
             source.FolderState.ShowIconNames,
             source.FolderState.IconsOnly,
-            source.FolderState.IconLayoutMode);
+            source.FolderState.IconLayoutMode,
+            StartupService.IsEnabled());
         _settingsSession = session;
         var settings = new SettingsWindow(session);
         settings.PositionNear(source, _windows);

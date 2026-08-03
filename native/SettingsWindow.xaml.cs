@@ -34,7 +34,8 @@ public partial class SettingsWindow : Window
             session.OriginalShowFolderName,
             session.OriginalShowIconNames,
             session.OriginalIconsOnly,
-            session.OriginalIconLayoutMode);
+            session.OriginalIconLayoutMode,
+            session.OriginalStartWithWindows);
         CurrentFolderNameText.Text = _session.TargetFolderName;
         CurrentFolderNameText.ToolTip = _session.TargetFolderName;
         LoadControls(
@@ -42,7 +43,8 @@ public partial class SettingsWindow : Window
             _session.OriginalShowFolderName,
             _session.OriginalShowIconNames,
             _session.OriginalIconsOnly,
-            _session.OriginalIconLayoutMode);
+            _session.OriginalIconLayoutMode,
+            _session.OriginalStartWithWindows);
         RefreshHiddenOrganizers();
     }
 
@@ -198,7 +200,8 @@ public partial class SettingsWindow : Window
         bool? showFolderName = null,
         bool? showIconNames = null,
         bool? iconsOnly = null,
-        OrganizerIconLayoutMode? iconLayoutMode = null)
+        OrganizerIconLayoutMode? iconLayoutMode = null,
+        bool? startWithWindows = null)
     {
         _syncingControls = true;
         GlassToggle.IsChecked = appearance.GlassEnabled;
@@ -232,6 +235,11 @@ public partial class SettingsWindow : Window
             ListLayoutOption.IsChecked = iconLayoutMode.Value is OrganizerIconLayoutMode.List;
         }
 
+        if (startWithWindows.HasValue)
+        {
+            StartupToggle.IsChecked = startWithWindows.Value;
+        }
+
         SyncTextFromSliders();
         UpdateTogglePresentation();
         UpdateIconLayoutPresentation();
@@ -257,6 +265,7 @@ public partial class SettingsWindow : Window
         ShowIconNames = ShowIconNamesToggle.IsChecked == true,
         IconsOnly = IconsOnlyToggle.IsChecked == true,
         IconLayoutMode = GetSelectedIconLayoutMode(),
+        StartWithWindows = StartupToggle.IsChecked == true,
     };
 
     private void PreviewDraft()
@@ -278,6 +287,7 @@ public partial class SettingsWindow : Window
         var glassEnabled = GlassToggle.IsChecked == true;
         GlassStateText.Text = glassEnabled ? "已开启" : "已关闭";
         MagnetStateText.Text = MagnetToggle.IsChecked == true ? "已开启" : "已关闭";
+        StartupStateText.Text = StartupToggle.IsChecked == true ? "已开启" : "已关闭";
     }
 
     private OrganizerIconLayoutMode GetSelectedIconLayoutMode()
@@ -423,6 +433,17 @@ public partial class SettingsWindow : Window
 
         UpdateTogglePresentation();
         PreviewDraft();
+    }
+
+    private void StartupToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_syncingControls)
+        {
+            return;
+        }
+
+        UpdateTogglePresentation();
+        InlineStatus.Text = string.Empty;
     }
 
     private void BackgroundTone_Changed(object sender, RoutedEventArgs e)

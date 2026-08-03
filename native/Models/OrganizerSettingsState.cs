@@ -16,6 +16,8 @@ public sealed class OrganizerSettingsDraft
 
     public OrganizerIconLayoutMode IconLayoutMode { get; init; } = OrganizerIconLayoutMode.Medium;
 
+    public bool StartWithWindows { get; init; }
+
     public OrganizerSettingsDraft Copy() => new()
     {
         Appearance = Appearance.Copy(),
@@ -23,6 +25,7 @@ public sealed class OrganizerSettingsDraft
         ShowIconNames = ShowIconNames,
         IconsOnly = IconsOnly,
         IconLayoutMode = IconLayoutMode,
+        StartWithWindows = StartWithWindows,
     };
 }
 
@@ -38,7 +41,8 @@ public sealed record OrganizerSettingsSessionSnapshot(
     bool OriginalShowFolderName,
     bool OriginalShowIconNames,
     bool OriginalIconsOnly,
-    OrganizerIconLayoutMode OriginalIconLayoutMode);
+    OrganizerIconLayoutMode OriginalIconLayoutMode,
+    bool OriginalStartWithWindows);
 
 /// <summary>
 /// Lightweight runtime projection used by SettingsWindow to recover hidden

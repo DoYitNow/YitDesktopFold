@@ -481,6 +481,7 @@ internal static class Program
             ShowIconNames = false,
             IconsOnly = true,
             IconLayoutMode = OrganizerIconLayoutMode.List,
+            StartWithWindows = true,
         };
         var copy = draft.Copy();
         copy.Appearance.BackgroundOpacity = 0.9;
@@ -490,7 +491,8 @@ internal static class Program
         Assert(copy.ShowFolderName &&
                !copy.ShowIconNames &&
                copy.IconsOnly &&
-               copy.IconLayoutMode is OrganizerIconLayoutMode.List,
+               copy.IconLayoutMode is OrganizerIconLayoutMode.List &&
+               copy.StartWithWindows,
             "Copying a combined settings draft lost current-organizer display flags.");
     }
 

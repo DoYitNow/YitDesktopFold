@@ -79,6 +79,7 @@ public partial class MainWindow : Window
     private string[] _cachedDesktopDropPaths = [];
     private bool _suppressNextShortcutClick;
     private bool _synchronizingItems;
+    private Point? _shortcutContextMenuAnchorScreen;
 
     public MainWindow(
         OrganizerFolderState folderState,
@@ -1193,6 +1194,257 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ShortcutContextMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu { DataContext: ShortcutItem item } menu)
+        {
+            return;
+        }
+
+        _shortcutContextMenuAnchorScreen = menu.PointToScreen(new Point(0, 0));
+
+        var isFileSystemItem = !DesktopShellItemService.IsShellNamespacePath(item.LaunchPath) &&
+                               (File.Exists(item.LaunchPath) || Directory.Exists(item.LaunchPath));
+        var shellKind = DesktopShellItemService.GetShellItemKind(item.LaunchPath);
+        foreach (var entry in menu.Items)
+        {
+            if (entry is Separator { Tag: "item-actions-separator" } separator)
+            {
+                separator.Visibility = isFileSystemItem ||
+                                       shellKind is DesktopShellItemKind.RecycleBin or DesktopShellItemKind.ThisPc
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+                continue;
+            }
+
+            if (entry is not MenuItem { Tag: string tag } command)
+            {
+                continue;
+            }
+
+            if (tag is "cut" or "copy" or "delete" or "app-rename")
+            {
+                command.Visibility = isFileSystemItem ? Visibility.Visible : Visibility.Collapsed;
+                command.IsEnabled = isFileSystemItem;
+            }
+            else if (tag == "recycle-empty")
+            {
+                command.Visibility = shellKind == DesktopShellItemKind.RecycleBin
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+                command.IsEnabled = DesktopShellItemService.GetRecycleBinItemCount() != 0;
+            }
+            else if (tag == "this-pc-manage")
+            {
+                command.Visibility = shellKind == DesktopShellItemKind.ThisPc
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+        }
+    }
+
+    private void OpenShortcutMenu_Click(object sender, RoutedEventArgs e) => Shortcut_Click(sender, e);
+
+    private void ShortcutShellVerb_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ShortcutItem item, Tag: string verb })
+        {
+            return;
+        }
+
+        AppHost.MarkActive(this);
+        var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+        if (source is null || !ShellContextMenuService.TryInvokeVerb(item.LaunchPath, source, verb))
+        {
+            ShowToast("此项目暂不支持该操作");
+            return;
+        }
+
+        if (verb is "copy" or "cut")
+        {
+            ShowToast(verb == "copy" ? "已复制" : "已剪切");
+        }
+    }
+
+    private async void EmptyRecycleBin_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ShortcutItem item } ||
+            DesktopShellItemService.GetShellItemKind(item.LaunchPath) != DesktopShellItemKind.RecycleBin)
+        {
+            return;
+        }
+
+        var itemCount = DesktopShellItemService.GetRecycleBinItemCount();
+        if (itemCount == 0)
+        {
+            ShowToast("回收站已经是空的");
+            return;
+        }
+
+        var countDescription = itemCount > 0 ? $"其中有 {itemCount} 个项目。" : string.Empty;
+        var choice = await ShowChoiceDialogAsync(
+            "清空回收站",
+            $"确定永久删除回收站中的全部内容吗？{countDescription}",
+            "清空",
+            secondaryText: null,
+            cancelText: "取消");
+        if (choice != DialogChoice.Primary)
+        {
+            return;
+        }
+
+        var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+        var owner = source?.Handle ?? IntPtr.Zero;
+        var succeeded = await Task.Run(() => DesktopShellItemService.EmptyRecycleBin(owner));
+        if (succeeded)
+        {
+            item.Icon = null;
+            _iconService.Forget(item.LaunchPath);
+            await Task.Delay(160);
+            await LoadMissingIconsAsync([item]);
+            ShowToast("回收站已清空");
+            return;
+        }
+
+        await ShowAlertAsync("无法清空回收站", "Windows 未能完成该操作，请稍后重试。");
+    }
+
+    private void ManageThisPc_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ShortcutItem item } ||
+            DesktopShellItemService.GetShellItemKind(item.LaunchPath) != DesktopShellItemKind.ThisPc)
+        {
+            return;
+        }
+
+        var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+        if (source is null || !ShellContextMenuService.TryInvokeVerb(item.LaunchPath, source, "Manage"))
+        {
+            ShowToast("无法打开计算机管理");
+        }
+    }
+
+    private async void RenameShortcutMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ShortcutItem item } ||
+            DesktopShellItemService.IsShellNamespacePath(item.LaunchPath))
+        {
+            return;
+        }
+
+        var sourcePath = item.LaunchPath;
+        var isDirectory = Directory.Exists(sourcePath);
+        if (!isDirectory && !File.Exists(sourcePath))
+        {
+            ShowToast("项目已经不存在");
+            return;
+        }
+
+        var newName = await ShowTextPromptAsync("重命名", "输入新的桌面项目名称", item.Name);
+        if (newName is null || string.Equals(newName, item.Name, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (newName is "." or ".." ||
+            newName.EndsWith(' ') ||
+            newName.EndsWith('.') ||
+            newName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            await ShowAlertAsync("名称不可用", "名称包含 Windows 不允许使用的字符，或以空格、句点结尾。");
+            return;
+        }
+
+        var extension = isDirectory ? string.Empty : Path.GetExtension(sourcePath);
+        var targetFileName = extension.Length > 0 && !newName.EndsWith(extension, StringComparison.OrdinalIgnoreCase)
+            ? newName + extension
+            : newName;
+        var parentDirectory = Path.GetDirectoryName(sourcePath);
+        if (string.IsNullOrWhiteSpace(parentDirectory))
+        {
+            ShowToast("无法确定项目位置");
+            return;
+        }
+
+        var destinationPath = Path.Combine(parentDirectory, targetFileName);
+        if (!string.Equals(sourcePath, destinationPath, StringComparison.OrdinalIgnoreCase) &&
+            (File.Exists(destinationPath) || Directory.Exists(destinationPath)))
+        {
+            await ShowAlertAsync("名称已存在", "桌面中已经存在同名项目。");
+            return;
+        }
+
+        try
+        {
+            if (isDirectory)
+            {
+                Directory.Move(sourcePath, destinationPath);
+            }
+            else
+            {
+                File.Move(sourcePath, destinationPath);
+            }
+
+            item.LaunchPath = destinationPath;
+            item.DesktopIdentity = DesktopItemIdentityService.GetIdentity(destinationPath);
+            item.Name = isDirectory
+                ? new DirectoryInfo(destinationPath).Name
+                : Path.GetFileNameWithoutExtension(destinationPath);
+            _ = LoadMissingIconsAsync([item]);
+            TrySaveState(showError: false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            await ShowAlertAsync("无法重命名", exception.Message);
+        }
+    }
+
+    private void ShowFullShellMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ShortcutItem item })
+        {
+            return;
+        }
+
+        var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+        if (source is null || !ShellContextMenuService.TryShow(item.LaunchPath, source))
+        {
+            ShowToast("无法打开 Windows 完整菜单");
+        }
+    }
+
+    private void ShowFullShellMenuAnchored_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement menuItem || menuItem.DataContext is not ShortcutItem item)
+        {
+            return;
+        }
+
+        var parsingPath = item.LaunchPath;
+        var anchor = _shortcutContextMenuAnchorScreen;
+        var source = PresentationSource.FromVisual(this) as System.Windows.Interop.HwndSource;
+        if (source is null)
+        {
+            ShowToast("无法打开 Windows 完整菜单");
+            return;
+        }
+
+        if (ItemsControl.ItemsControlFromItemContainer(menuItem) is ContextMenu compactMenu)
+        {
+            compactMenu.IsOpen = false;
+        }
+
+        Dispatcher.BeginInvoke(
+            () =>
+            {
+                if (!ShellContextMenuService.TryShow(parsingPath, source, anchor))
+                {
+                    ShowToast("无法打开 Windows 完整菜单");
+                }
+            },
+            DispatcherPriority.Input);
+    }
+
     private void ShortcutButton_LostMouseCapture(object sender, MouseEventArgs e)
     {
         _shortcutDragCandidate = null;
@@ -1496,7 +1748,6 @@ public partial class MainWindow : Window
     private void OrganizerMenu_Opened(object sender, RoutedEventArgs e)
     {
         AppHost.MarkActive(this);
-        StartWithWindowsItem.IsChecked = StartupService.IsEnabled();
         DeleteOrganizerItem.IsEnabled = AppHost.OrganizerCount > 1;
     }
 
@@ -1540,21 +1791,6 @@ public partial class MainWindow : Window
         if (choice == DialogChoice.Primary)
         {
             AppHost.RemoveOrganizer(this);
-        }
-    }
-
-    private async void StartWithWindows_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            StartupService.SetEnabled(StartWithWindowsItem.IsChecked);
-            TrySaveState(showError: false);
-            ShowToast(StartWithWindowsItem.IsChecked ? "已启用登录时启动" : "已关闭登录时启动");
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or InvalidOperationException or SecurityException)
-        {
-            StartWithWindowsItem.IsChecked = StartupService.IsEnabled();
-            await ShowAlertAsync("无法更改启动设置", exception.Message);
         }
     }
 
