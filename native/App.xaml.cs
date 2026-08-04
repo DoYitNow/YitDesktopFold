@@ -29,6 +29,7 @@ public partial class App : Application
     private OrganizerAppState _state = new();
     private OrganizerAppearanceState? _appearancePreview;
     private OrganizerAppearanceState? _pendingAppearancePreview;
+    private OrganizerSettingsDraft? _pendingSettingsDraft;
     private OrganizerSettingsSessionSnapshot? _settingsSession;
     private MainWindow? _lastActiveWindow;
     private int _nativeVisibilityRestoredForExit;
@@ -240,21 +241,10 @@ public partial class App : Application
             return false;
         }
 
-        var target = FindWindow(session.TargetFolderId);
-        if (target is null)
-        {
-            return false;
-        }
-
         var snapshot = draft.Copy();
-        target.ApplyDisplayPreview(
-            snapshot.ShowFolderName,
-            snapshot.ShowIconNames,
-            snapshot.IconsOnly,
-            snapshot.IconLayoutMode,
-            animate: true);
         _appearancePreview = snapshot.Appearance.Copy();
         _pendingAppearancePreview = _appearancePreview.Copy();
+        _pendingSettingsDraft = snapshot;
         if (_appearancePreviewOperation is { Status: DispatcherOperationStatus.Pending })
         {
             return true;
@@ -264,8 +254,26 @@ public partial class App : Application
         {
             var appearance = _pendingAppearancePreview;
             _pendingAppearancePreview = null;
+            var pendingDraft = _pendingSettingsDraft;
+            _pendingSettingsDraft = null;
             _appearancePreviewOperation = null;
-            if (_settingsSession?.Id == sessionId && appearance is not null)
+            if (_settingsSession?.Id != sessionId || pendingDraft is null)
+            {
+                return;
+            }
+
+            var target = FindWindow(session.TargetFolderId);
+            if (target is not null)
+            {
+                target.ApplyDisplayPreview(
+                    pendingDraft.ShowFolderName,
+                    pendingDraft.ShowIconNames,
+                    pendingDraft.IconsOnly,
+                    pendingDraft.IconLayoutMode,
+                    animate: false);
+            }
+
+            if (appearance is not null)
             {
                 ApplyAppearanceToAll(appearance, animate: false);
             }
@@ -281,6 +289,7 @@ public partial class App : Application
         }
 
         CancelPendingAppearanceBroadcast();
+        _pendingSettingsDraft = null;
         _appearancePreview = null;
         ApplyAppearanceToAll(_state.Appearance, animate: false);
         FindWindow(session.TargetFolderId)?.ClearDisplayPreview(animate: false);
@@ -447,6 +456,7 @@ public partial class App : Application
 
         _appearancePreviewOperation = null;
         _pendingAppearancePreview = null;
+        _pendingSettingsDraft = null;
     }
 
     public void QueueSave()
@@ -648,9 +658,6 @@ public partial class App : Application
         }
 
         var failed = new HashSet<ShortcutItem>();
-        var previousVisibilityState = items.ToDictionary(
-            item => item,
-            item => (item.NativeVisibilityManaged, item.NativeShellVisibilityRestoreValue));
         foreach (var item in items)
         {
             if (!target.Shortcuts.Contains(item))
@@ -701,6 +708,7 @@ public partial class App : Application
 
         if (failed.Count > 0)
         {
+            var retained = 0;
             foreach (var item in failed)
             {
                 try
@@ -712,16 +720,33 @@ public partial class App : Application
                     // The write-ahead state still retains enough ownership data for recovery.
                 }
 
-                var previous = previousVisibilityState[item];
-                item.NativeVisibilityManaged = previous.NativeVisibilityManaged;
-                item.NativeShellVisibilityRestoreValue = previous.NativeShellVisibilityRestoreValue;
-                target.Shortcuts.Remove(item);
+                if (!target.Shortcuts.Contains(item))
+                {
+                    continue;
+                }
+
+                // Keep the user's explicit classification even when the native
+                // icon cannot be suppressed (permissions on shared Public
+                // Desktop items). The item simply remains visible on the real
+                // desktop as a safe fallback; ownership is reset because no
+                // Windows state was actually changed.
+                item.NativeVisibilityManaged = false;
+                item.NativeShellVisibilityRestoreValue = null;
+                retained++;
             }
 
             FindWindow(targetFolderId)?.SynchronizeItemsFromState();
             if (writeAheadSaved && !TrySaveAll(out var rollbackSaveError))
             {
                 FindWindow(targetFolderId)?.ShowSaveFailure(rollbackSaveError);
+            }
+
+            if (retained > 0)
+            {
+                FindWindow(targetFolderId)?.ShowToast(
+                    retained == 1
+                        ? "已归类，但权限不足，无法隐藏桌面上的原始图标"
+                        : $"已归类 {retained} 个项目，但权限不足，无法隐藏桌面上的原始图标");
             }
         }
     }

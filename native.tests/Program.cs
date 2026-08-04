@@ -3,6 +3,8 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using YitDesktopFold.Native.Controls;
 using YitDesktopFold.Native.Models;
 using YitDesktopFold.Native.Services;
@@ -26,6 +28,7 @@ internal static class Program
         try
         {
             TestDesktopCatalogClassificationAndSync(testRoot, desktopRoot, commonDesktopRoot);
+            TestVisibilityOwnershipResetOnPermissionFailure(commonDesktopRoot);
             TestShellNamespaceDragClassification();
             TestLegacyManagedShortcutMigration(desktopRoot);
             TestStateRoundTripAndRecovery();
@@ -33,6 +36,7 @@ internal static class Program
             TestFixedLayoutGeometry();
             TestMagneticSnapGeometry();
             Console.WriteLine("PASS: desktop catalog classification, identity sync, and file safety");
+            Console.WriteLine("PASS: denied write-attributes ACL never claims visibility ownership");
             Console.WriteLine("PASS: Shell IDList drag classification for virtual Desktop icons");
             Console.WriteLine("PASS: legacy managed shortcuts migrate transactionally to Desktop");
             Console.WriteLine("PASS: multi-folder state round-trip/v1 migration/recovery");
@@ -148,6 +152,43 @@ internal static class Program
             "A valid System+Hidden Desktop item was discarded from its explicit classification.");
         Assert(visibility.HideAssignedItem(systemHidden) && !systemHidden.NativeVisibilityManaged,
             "The organizer claimed ownership of a System+Hidden item's original visibility.");
+    }
+
+    private static void TestVisibilityOwnershipResetOnPermissionFailure(string commonDesktopRoot)
+    {
+        var sharedItem = Path.Combine(commonDesktopRoot, "Shared read-only shortcut.lnk");
+        File.WriteAllText(sharedItem, "shared");
+        var currentUser = WindowsIdentity.GetCurrent().User;
+        Assert(currentUser is not null, "Could not resolve the current user SID for the ACL test.");
+        var denyWriteAttributes = new FileSystemAccessRule(
+            currentUser!,
+            FileSystemRights.WriteAttributes,
+            AccessControlType.Deny);
+        var fileInfo = new FileInfo(sharedItem);
+        var security = fileInfo.GetAccessControl();
+        security.AddAccessRule(denyWriteAttributes);
+        fileInfo.SetAccessControl(security);
+
+        try
+        {
+            using var catalog = new DesktopCatalogService(watchForChanges: false);
+            var item = catalog.CreateReference(sharedItem);
+            var visibility = new DesktopNativeVisibilityService();
+            var hidden = visibility.HideAssignedItem(item);
+            Assert(!hidden, "Hide succeeded despite the denied write-attributes ACL.");
+            Assert(!item.NativeVisibilityManaged && item.NativeShellVisibilityRestoreValue is null,
+                "The organizer claimed visibility ownership it could not apply.");
+            Assert((File.GetAttributes(sharedItem) & FileAttributes.Hidden) == 0,
+                "The real shared item changed despite the denied ACL.");
+        }
+        finally
+        {
+            var restoredFileInfo = new FileInfo(sharedItem);
+            var restored = restoredFileInfo.GetAccessControl();
+            restored.RemoveAccessRuleAll(denyWriteAttributes);
+            restoredFileInfo.SetAccessControl(restored);
+            File.Delete(sharedItem);
+        }
     }
 
     private static void TestLegacyManagedShortcutMigration(string desktopRoot)

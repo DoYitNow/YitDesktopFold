@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security;
 using YitDesktopFold.Native.Models;
 
 namespace YitDesktopFold.Native.Services;
@@ -36,7 +37,31 @@ public sealed class DesktopNativeVisibilityService
 
     public bool HideAssignedItem(ShortcutItem item)
     {
-        return PrepareHideAssignedItem(item) && ApplyPreparedHideAssignedItem(item);
+        if (!PrepareHideAssignedItem(item))
+        {
+            return false;
+        }
+
+        try
+        {
+            var hidden = ApplyPreparedHideAssignedItem(item);
+            if (!hidden)
+            {
+                item.NativeVisibilityManaged = false;
+                item.NativeShellVisibilityRestoreValue = null;
+            }
+
+            return hidden;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            // The real item was never changed (e.g. a shared Public Desktop
+            // shortcut whose ACL denies write-attributes). Never claim
+            // ownership of a visibility state that belongs to the user.
+            item.NativeVisibilityManaged = false;
+            item.NativeShellVisibilityRestoreValue = null;
+            return false;
+        }
     }
 
     public bool PrepareHideAssignedItem(ShortcutItem item)

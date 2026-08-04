@@ -52,6 +52,7 @@ public sealed class DesktopZOrderHost : IDisposable
     private WindowBackdropService? _backdropService;
     private WindowBackdropOptions _backdropOptions = WindowBackdropOptions.Default;
     private IntPtr _foregroundBeforeInteraction;
+    private bool? _appliedFrameHideSurface;
     private int _taskbarCreatedMessage;
     private bool _allowInteractionActivation;
     private bool _disposed;
@@ -159,6 +160,8 @@ public sealed class DesktopZOrderHost : IDisposable
         _backdropService?.Apply(_backdropOptions);
         // Accent changes can make DWM rebuild the outer frame, so apply the
         // pure-icon non-client policy last.
+        // Opacity-only preview ticks must not force a SWP_FRAMECHANGED rebuild
+        // of every organizer; only the surface mode alters the frame policy.
         ApplyDwmFramePresentation(hideSurface);
     }
 
@@ -220,7 +223,7 @@ public sealed class DesktopZOrderHost : IDisposable
         var usePerPixelAlpha = UpdateDwmTransparencyMode(_backdropOptions.HideSurface);
         _backdropOptions = _backdropOptions with { UsePerPixelAlpha = usePerPixelAlpha };
         _backdropService?.Apply(_backdropOptions, forceNativeRefresh: true);
-        ApplyDwmFramePresentation(_backdropOptions.HideSurface);
+        ApplyDwmFramePresentation(_backdropOptions.HideSurface, force: true);
     }
 
     private bool UpdateDwmTransparencyMode(bool hideSurface)
@@ -243,8 +246,14 @@ public sealed class DesktopZOrderHost : IDisposable
         return hideSurface && result == 0;
     }
 
-    private void ApplyDwmFramePresentation(bool hideSurface)
+    private void ApplyDwmFramePresentation(bool hideSurface, bool force = false)
     {
+        if (!force && _appliedFrameHideSurface == hideSurface)
+        {
+            return;
+        }
+
+        _appliedFrameHideSurface = hideSurface;
         if (_windowHandle == IntPtr.Zero)
         {
             return;

@@ -80,6 +80,9 @@ public partial class MainWindow : Window
     private bool _suppressNextShortcutClick;
     private bool _synchronizingItems;
     private Point? _shortcutContextMenuAnchorScreen;
+    private Color _cachedContrastForeground;
+    private Rect _cachedContrastBounds;
+    private bool _cachedContrastValid;
 
     public MainWindow(
         OrganizerFolderState folderState,
@@ -943,7 +946,7 @@ public partial class MainWindow : Window
         LiveStatus.Text = error ?? "无法写入状态文件。";
     }
 
-    private async void ShowToast(string message)
+    public async void ShowToast(string message)
     {
         var version = ++_toastVersion;
         ToastText.Text = message;
@@ -1059,14 +1062,44 @@ public partial class MainWindow : Window
 
     private void UpdateContentForeground(double opacity, bool useLightBackground)
     {
-        var color = DesktopContrastService.ResolveForeground(
-            this,
-            preferLightForeground: !useLightBackground,
-            opacity);
+        var color = ResolveForegroundColor(opacity, useLightBackground);
         var contentBrush = new SolidColorBrush(color);
         contentBrush.Freeze();
         Foreground = contentBrush;
         FolderNameText.Foreground = contentBrush;
+    }
+
+    private Color ResolveForegroundColor(double opacity, bool useLightBackground)
+    {
+        // Wallpaper sampling is expensive (screen DC + GetPixel) and the
+        // wallpaper does not change while settings are previewed, so cache the
+        // sampled result by the window's on-screen bounds. Hidden organizers
+        // and opaque surfaces never sample and always use the fixed tone.
+        if (opacity > 0.12 || !IsLoaded || !IsVisible || _isOrganizerHidden ||
+            ActualWidth <= 0 || ActualHeight <= 0)
+        {
+            _cachedContrastValid = false;
+            return DesktopContrastService.ResolveForeground(
+                this,
+                preferLightForeground: !useLightBackground,
+                opacity);
+        }
+
+        var topLeft = PointToScreen(new Point(0, 0));
+        var currentBounds = new Rect(topLeft.X, topLeft.Y, ActualWidth, ActualHeight);
+        if (_cachedContrastValid && currentBounds == _cachedContrastBounds)
+        {
+            return _cachedContrastForeground;
+        }
+
+        var color = DesktopContrastService.ResolveForeground(
+            this,
+            preferLightForeground: !useLightBackground,
+            opacity);
+        _cachedContrastForeground = color;
+        _cachedContrastBounds = currentBounds;
+        _cachedContrastValid = true;
+        return color;
     }
 
     private static void AnimateBrush(SolidColorBrush brush, Color target, int milliseconds)
