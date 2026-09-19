@@ -41,10 +41,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-installer.ps
 安装包不提交到 Git 历史，上传到 GitHub Releases：
 
 ```powershell
-gh release create v0.1.0 `
-  .\release\YitDesktopFold-Setup-0.1.0-win-x64.exe `
-  --title "YitDesktopFold 0.1.0" `
-  --notes-file .\docs\releases\v0.1.0.md
+gh release create v0.1.1 `
+  .\release\YitDesktopFold-Setup-0.1.1-win-x64.exe `
+  --title "YitDesktopFold 0.1.1" `
+  --notes-file .\docs\releases\v0.1.1.md
 ```
 
 发布后从 Release 页面重新下载并校验 SHA-256，确认资源可公开访问。

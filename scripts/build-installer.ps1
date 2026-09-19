@@ -8,7 +8,7 @@ $projectPath = Join-Path $repoRoot "native\YitDesktopFold.Native.csproj"
 $publishDirectory = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "artifacts\publish\win-x64"))
 $installerScript = Join-Path $repoRoot "installer\YitDesktopFold.iss"
 $releaseDirectory = Join-Path $repoRoot "release"
-$installerPath = Join-Path $releaseDirectory "YitDesktopFold-Setup-0.1.0-win-x64.exe"
+$installerPath = Join-Path $releaseDirectory "YitDesktopFold-Setup-0.1.1-win-x64.exe"
 
 if (-not $publishDirectory.StartsWith($repoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Publish directory resolved outside the repository."

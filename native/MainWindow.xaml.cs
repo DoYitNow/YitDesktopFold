@@ -80,6 +80,7 @@ public partial class MainWindow : Window
     private bool _suppressNextShortcutClick;
     private bool _synchronizingItems;
     private bool _placementFallbackActive;
+    private ContextMenu? _openShortcutContextMenu;
     private Point? _shortcutContextMenuAnchorScreen;
     private Color _cachedContrastForeground;
     private Rect _cachedContrastBounds;
@@ -1270,6 +1271,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        _openShortcutContextMenu = menu;
         _shortcutContextMenuAnchorScreen = menu.PointToScreen(new Point(0, 0));
 
         var isFileSystemItem = !DesktopShellItemService.IsShellNamespacePath(item.LaunchPath) &&
@@ -1309,6 +1311,39 @@ public partial class MainWindow : Window
                     ? Visibility.Visible
                     : Visibility.Collapsed;
             }
+        }
+    }
+
+    private void ShortcutContextMenu_Closed(object sender, RoutedEventArgs e)
+    {
+        if (ReferenceEquals(_openShortcutContextMenu, sender))
+        {
+            _openShortcutContextMenu = null;
+        }
+    }
+
+    public void CloseContextMenusOutside(Point screenPosition)
+    {
+        CloseContextMenuOutside(OrganizerMenu, screenPosition);
+        if (_openShortcutContextMenu is { } shortcutMenu)
+        {
+            CloseContextMenuOutside(shortcutMenu, screenPosition);
+        }
+    }
+
+    private static void CloseContextMenuOutside(ContextMenu menu, Point screenPosition)
+    {
+        if (!menu.IsOpen)
+        {
+            return;
+        }
+
+        var topLeft = menu.PointToScreen(new Point(0, 0));
+        var bottomRight = menu.PointToScreen(new Point(menu.ActualWidth, menu.ActualHeight));
+        if (screenPosition.X < topLeft.X || screenPosition.X > bottomRight.X ||
+            screenPosition.Y < topLeft.Y || screenPosition.Y > bottomRight.Y)
+        {
+            menu.IsOpen = false;
         }
     }
 

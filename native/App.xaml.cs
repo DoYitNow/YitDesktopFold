@@ -117,6 +117,7 @@ public partial class App : Application
         _desktopMarqueeSelection.SelectionChanged += DesktopMarquee_SelectionChanged;
         _desktopMarqueeSelection.SelectionCompleted += DesktopMarquee_SelectionCompleted;
         _desktopMarqueeSelection.ClearRequested += DesktopMarquee_ClearRequested;
+        _desktopMarqueeSelection.PointerPressed += DesktopPointer_Pressed;
         _keyboardHotKey = new GlobalHotKeyService();
         _keyboardHotKey.Pressed += KeyboardHotKey_Pressed;
         foreach (var window in _windows)
@@ -943,6 +944,7 @@ public partial class App : Application
             _desktopMarqueeSelection.SelectionChanged -= DesktopMarquee_SelectionChanged;
             _desktopMarqueeSelection.SelectionCompleted -= DesktopMarquee_SelectionCompleted;
             _desktopMarqueeSelection.ClearRequested -= DesktopMarquee_ClearRequested;
+            _desktopMarqueeSelection.PointerPressed -= DesktopPointer_Pressed;
             _desktopMarqueeSelection.Dispose();
             _desktopMarqueeSelection = null;
         }
@@ -1052,6 +1054,14 @@ public partial class App : Application
     {
         _marqueeSelectionBaseline.Clear();
         ClearDesktopSelection();
+    }
+
+    private void DesktopPointer_Pressed(object? sender, DesktopPointerPressedEventArgs e)
+    {
+        foreach (var window in _windows)
+        {
+            window.CloseContextMenusOutside(e.ScreenPosition);
+        }
     }
 
     private void ClearDesktopSelection()

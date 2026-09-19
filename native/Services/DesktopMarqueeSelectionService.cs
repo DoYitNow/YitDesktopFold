@@ -16,6 +16,8 @@ public sealed class DesktopMarqueeSelectionService : IDisposable
     private const int WmMouseMove = 0x0200;
     private const int WmLButtonDown = 0x0201;
     private const int WmLButtonUp = 0x0202;
+    private const int WmRButtonDown = 0x0204;
+    private const int WmMButtonDown = 0x0207;
     private const int VkControl = 0x11;
     private readonly MouseHookProcedure _hookProcedure;
     private IntPtr _hook;
@@ -45,12 +47,21 @@ public sealed class DesktopMarqueeSelectionService : IDisposable
 
     public event EventHandler? ClearRequested;
 
+    public event EventHandler<DesktopPointerPressedEventArgs>? PointerPressed;
+
     private IntPtr MouseHookCallback(int code, IntPtr message, IntPtr data)
     {
         if (code >= 0 && !_disposed)
         {
             var mouseMessage = unchecked((int)message.ToInt64());
             var information = Marshal.PtrToStructure<LowLevelMouseHookData>(data);
+            if (mouseMessage is WmLButtonDown or WmRButtonDown or WmMButtonDown)
+            {
+                PointerPressed?.Invoke(
+                    this,
+                    new DesktopPointerPressedEventArgs(new Point(information.Point.X, information.Point.Y)));
+            }
+
             switch (mouseMessage)
             {
                 case WmLButtonDown when IsDesktopWallpaperPoint(information.Point):
@@ -194,3 +205,5 @@ public sealed class DesktopMarqueeSelectionService : IDisposable
 public sealed record DesktopMarqueeStartedEventArgs(bool Additive);
 
 public sealed record DesktopMarqueeEventArgs(Rect ScreenBounds, bool Additive);
+
+public sealed record DesktopPointerPressedEventArgs(Point ScreenPosition);
