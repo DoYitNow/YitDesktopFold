@@ -4,7 +4,7 @@ namespace YitDesktopFold.Native.Models;
 
 public sealed class OrganizerAppState
 {
-    public int SchemaVersion { get; set; } = 4;
+    public int SchemaVersion { get; set; } = 5;
 
     public bool StartWithWindows { get; set; }
 
@@ -80,5 +80,23 @@ public sealed class OrganizerFolderState
 
     public double Height { get; set; } = 340;
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PreferredMonitorId { get; set; }
+
+    public List<OrganizerDisplayPlacementState> DisplayPlacements { get; set; } = [];
+
     public List<ShortcutItem> Shortcuts { get; set; } = [];
+}
+
+public sealed class OrganizerDisplayPlacementState
+{
+    public string MonitorId { get; set; } = string.Empty;
+
+    public double LeftRatio { get; set; }
+
+    public double TopRatio { get; set; }
+
+    public double WidthRatio { get; set; }
+
+    public double HeightRatio { get; set; }
 }

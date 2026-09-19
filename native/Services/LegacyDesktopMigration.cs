@@ -57,7 +57,7 @@ public static class LegacyDesktopMigration
                 UpdateReference(item, destination);
             }
 
-            state.SchemaVersion = 4;
+            state.SchemaVersion = 5;
             return transaction;
         }
         catch

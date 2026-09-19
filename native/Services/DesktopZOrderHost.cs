@@ -65,6 +65,8 @@ public sealed class DesktopZOrderHost : IDisposable
 
     public event EventHandler? WorkAreaChanged;
 
+    public event EventHandler? DisplayConfigurationChanged;
+
     public void Attach()
     {
         _windowHandle = new WindowInteropHelper(_window).Handle;
@@ -322,6 +324,10 @@ public sealed class DesktopZOrderHost : IDisposable
             }
 
             WorkAreaChanged?.Invoke(this, EventArgs.Empty);
+            if (message == WmDisplayChange)
+            {
+                DisplayConfigurationChanged?.Invoke(this, EventArgs.Empty);
+            }
         }
 
         return IntPtr.Zero;

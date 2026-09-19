@@ -79,6 +79,7 @@ public partial class MainWindow : Window
     private string[] _cachedDesktopDropPaths = [];
     private bool _suppressNextShortcutClick;
     private bool _synchronizingItems;
+    private bool _placementFallbackActive;
     private Point? _shortcutContextMenuAnchorScreen;
     private Color _cachedContrastForeground;
     private Rect _cachedContrastBounds;
@@ -263,14 +264,39 @@ public partial class MainWindow : Window
 
     private void Window_SourceInitialized(object? sender, EventArgs e)
     {
+        var restoredPreferredPlacement = DisplayPlacementService.TryRestorePreferred(this, _folderState);
+        _placementFallbackActive = !restoredPreferredPlacement &&
+                                   !string.IsNullOrWhiteSpace(_folderState.PreferredMonitorId);
         _desktopHost = new DesktopZOrderHost(this);
         _desktopHost.WorkAreaChanged += DesktopHost_WorkAreaChanged;
+        _desktopHost.DisplayConfigurationChanged += DesktopHost_DisplayConfigurationChanged;
         _desktopHost.Attach();
         ApplyAppearance(_currentAppearance, animate: false);
     }
 
     private void DesktopHost_WorkAreaChanged(object? sender, EventArgs e) =>
         Dispatcher.BeginInvoke(EnsureVisible, DispatcherPriority.Background);
+
+    private void DesktopHost_DisplayConfigurationChanged(object? sender, EventArgs e) =>
+        Dispatcher.BeginInvoke(RestoreDisplayPlacement, DispatcherPriority.Background);
+
+    private void RestoreDisplayPlacement()
+    {
+        _suppressPlacementSave = true;
+        try
+        {
+            var restored = DisplayPlacementService.TryRestorePreferred(this, _folderState);
+            _placementFallbackActive = !restored &&
+                                       !string.IsNullOrWhiteSpace(_folderState.PreferredMonitorId);
+            WorkAreaService.ClampToWorkArea(this);
+        }
+        finally
+        {
+            _suppressPlacementSave = false;
+        }
+
+        _desktopHost?.RefreshZOrder();
+    }
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
@@ -358,6 +384,7 @@ public partial class MainWindow : Window
 
         await ApplyMagneticSnapAsync();
         EnsureVisible();
+        MarkPlacementUserChanged();
         TrySaveState(showError: false);
     }
 
@@ -756,6 +783,7 @@ public partial class MainWindow : Window
         }
 
         EnsureVisible();
+        MarkPlacementUserChanged();
         TrySaveState(showError: false);
         LiveStatus.Text = $"整理块尺寸：宽 {Math.Round(Width)}，高 {Math.Round(Height)}";
     }
@@ -812,6 +840,7 @@ public partial class MainWindow : Window
             Top + direction.Y * 8,
             workArea.Top + WorkAreaService.EdgeGap,
             Math.Max(workArea.Top + WorkAreaService.EdgeGap, workArea.Bottom - Height - WorkAreaService.EdgeGap));
+        MarkPlacementUserChanged();
         LiveStatus.Text = $"整理块位置：横向 {Math.Round(Left)}，纵向 {Math.Round(Top)}";
         QueueSave();
     }
@@ -892,6 +921,7 @@ public partial class MainWindow : Window
         var maximumHeight = Math.Max(MinHeight, workArea.Bottom - Top - WorkAreaService.EdgeGap);
         Width = Math.Clamp(Width + direction.X * 16, MinWidth, maximumWidth);
         Height = Math.Clamp(Height + direction.Y * 16, MinHeight, maximumHeight);
+        MarkPlacementUserChanged();
         LiveStatus.Text = $"整理块尺寸：宽 {Math.Round(Width)}，高 {Math.Round(Height)}";
         QueueSave();
     }
@@ -923,8 +953,14 @@ public partial class MainWindow : Window
         _folderState.Top = Top;
         _folderState.Width = Width;
         _folderState.Height = Height;
+        if (!_placementFallbackActive)
+        {
+            DisplayPlacementService.Capture(this, _folderState);
+        }
         _folderState.Shortcuts = Items.ToList();
     }
+
+    private void MarkPlacementUserChanged() => _placementFallbackActive = false;
 
     private bool TrySaveState(bool showError) => TrySaveState(showError, out _);
 
@@ -1832,6 +1868,7 @@ public partial class MainWindow : Window
         Width = DefaultWidth;
         Height = DefaultHeight;
         EnsureVisible();
+        MarkPlacementUserChanged();
         TrySaveState(showError: false);
         ShowToast("已恢复默认大小");
     }
@@ -1868,6 +1905,7 @@ public partial class MainWindow : Window
         if (_desktopHost is not null)
         {
             _desktopHost.WorkAreaChanged -= DesktopHost_WorkAreaChanged;
+            _desktopHost.DisplayConfigurationChanged -= DesktopHost_DisplayConfigurationChanged;
             _desktopHost.Dispose();
         }
     }

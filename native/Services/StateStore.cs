@@ -58,7 +58,7 @@ public sealed class StateStore
     public void Save(OrganizerAppState state)
     {
         AppPaths.EnsureCreated();
-        state.SchemaVersion = 4;
+        state.SchemaVersion = 5;
         var temporaryPath = AppPaths.StateFile + ".tmp";
         var json = JsonSerializer.Serialize(state, JsonOptions);
         File.WriteAllText(temporaryPath, json);
@@ -158,7 +158,7 @@ public sealed class StateStore
 
     private static OrganizerAppState Normalize(OrganizerAppState state)
     {
-        state.SchemaVersion = 4;
+        state.SchemaVersion = 5;
         state.Folders ??= [];
         state.Appearance ??= new OrganizerAppearanceState();
         state.Appearance.BackgroundOpacity = Math.Clamp(
@@ -193,11 +193,33 @@ public sealed class StateStore
                 OrganizerLayoutMetrics.GetMinimumWidth(folder.IconLayoutMode),
                 folder.Width);
             folder.Height = Math.Max(120, folder.Height);
+            folder.PreferredMonitorId = string.IsNullOrWhiteSpace(folder.PreferredMonitorId)
+                ? null
+                : folder.PreferredMonitorId.Trim();
+            folder.DisplayPlacements ??= [];
+            folder.DisplayPlacements = folder.DisplayPlacements
+                .Where(placement => !string.IsNullOrWhiteSpace(placement.MonitorId))
+                .GroupBy(placement => placement.MonitorId.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Select(group => NormalizePlacement(group.Last()))
+                .ToList();
             folder.Shortcuts ??= [];
         }
 
         return state;
     }
+
+    private static OrganizerDisplayPlacementState NormalizePlacement(
+        OrganizerDisplayPlacementState placement) => new()
+    {
+        MonitorId = placement.MonitorId.Trim(),
+        LeftRatio = NormalizeRatio(placement.LeftRatio),
+        TopRatio = NormalizeRatio(placement.TopRatio),
+        WidthRatio = NormalizeRatio(placement.WidthRatio, 0.05),
+        HeightRatio = NormalizeRatio(placement.HeightRatio, 0.05),
+    };
+
+    private static double NormalizeRatio(double value, double minimum = 0) =>
+        Math.Clamp(double.IsFinite(value) ? value : minimum, minimum, 1);
 
     private static void BackupCorruptState()
     {

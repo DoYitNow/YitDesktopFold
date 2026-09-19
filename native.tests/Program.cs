@@ -35,6 +35,7 @@ internal static class Program
             TestCombinedSettingsDraftIsolation();
             TestFixedLayoutGeometry();
             TestMagneticSnapGeometry();
+            TestDisplayPlacementMapping();
             Console.WriteLine("PASS: desktop catalog classification, identity sync, and file safety");
             Console.WriteLine("PASS: denied write-attributes ACL never claims visibility ownership");
             Console.WriteLine("PASS: Shell IDList drag classification for virtual Desktop icons");
@@ -44,6 +45,7 @@ internal static class Program
             Console.WriteLine("PASS: combined global/current-organizer settings draft isolation");
             Console.WriteLine("PASS: fixed large/medium/small/list layout geometry and reflow");
             Console.WriteLine("PASS: position and nearby-neighbor size snap geometry");
+            Console.WriteLine("PASS: per-monitor proportional placement mapping");
             return 0;
         }
         catch (Exception exception)
@@ -222,7 +224,7 @@ internal static class Program
         new StateStore().Save(state);
         transaction.Commit();
         var migrated = state.Folders[0].Shortcuts[0];
-        Assert(state.SchemaVersion == 4 && File.Exists(migrated.LaunchPath),
+        Assert(state.SchemaVersion == 5 && File.Exists(migrated.LaunchPath),
             "Legacy managed shortcut was not restored to the real Desktop.");
         Assert(AppPaths.IsDirectDesktopItem(migrated.LaunchPath) && !File.Exists(managedPath),
             "Legacy shortcut remained in application-managed storage.");
@@ -345,6 +347,18 @@ internal static class Program
                     Top = 90,
                     Width = 444,
                     Height = 340,
+                    PreferredMonitorId = @"MONITOR\TEST\PRIMARY",
+                    DisplayPlacements =
+                    [
+                        new OrganizerDisplayPlacementState
+                        {
+                            MonitorId = @"MONITOR\TEST\PRIMARY",
+                            LeftRatio = 0.73,
+                            TopRatio = 0.18,
+                            WidthRatio = 0.24,
+                            HeightRatio = 0.31,
+                        },
+                    ],
                     Shortcuts =
                     [
                         new ShortcutItem
@@ -396,6 +410,10 @@ internal static class Program
             "Independent fixed icon layout modes did not round-trip.");
         Assert(loaded.Folders[1].Left == 640 && loaded.Folders[1].Width == 360,
             "Independent folder placement did not round-trip.");
+        Assert(loaded.Folders[0].PreferredMonitorId == @"MONITOR\TEST\PRIMARY" &&
+               loaded.Folders[0].DisplayPlacements.Count == 1 &&
+               Math.Abs(loaded.Folders[0].DisplayPlacements[0].LeftRatio - 0.73) < 0.001,
+            "Per-monitor placement profile did not round-trip.");
         Assert(loaded.Appearance.GlassEnabled &&
                Math.Abs(loaded.Appearance.BackgroundOpacity - 0.71) < 0.001 &&
                loaded.Appearance.BackgroundTone is OrganizerBackgroundTone.Light &&
@@ -470,8 +488,8 @@ internal static class Program
             """);
         File.Delete(AppPaths.BackupStateFile);
         var migrated = store.Load();
-        Assert(migrated.SchemaVersion == 4 && migrated.Folders.Count == 1,
-            "Legacy state did not migrate to one schema-v4 folder.");
+        Assert(migrated.SchemaVersion == 5 && migrated.Folders.Count == 1,
+            "Legacy state did not migrate to one schema-v5 folder.");
         Assert(migrated.Folders[0].Left == 72 && migrated.Folders[0].Shortcuts.Count == 1,
             "Legacy placement or shortcuts were not preserved.");
         Assert(!migrated.Folders[0].ShowName &&
@@ -726,6 +744,38 @@ internal static class Program
             [new Rect(526, 102, 120, 80)]);
         Assert(rightNeighborWithSmallOverlap.SnappedWidth && rightNeighborWithSmallOverlap.SnappedHeight,
             "A small right-edge overshoot incorrectly discarded the right neighbor.");
+    }
+
+    private static void TestDisplayPlacementMapping()
+    {
+        var sourceWorkArea = new DisplayPlacementService.PhysicalRect(0, 0, 1920, 1040);
+        var sourceBounds = new DisplayPlacementService.PhysicalRect(122, 72, 602, 412);
+        var placement = DisplayPlacementService.CaptureBounds(sourceWorkArea, sourceBounds);
+        var sameDisplay = DisplayPlacementService.RestoreBounds(
+            sourceWorkArea,
+            placement,
+            monitorScale: 1,
+            minimumWidthDip: 94,
+            minimumHeightDip: 120);
+        Assert(sameDisplay == sourceBounds,
+            "Capturing and restoring on the same display changed organizer bounds.");
+
+        var largerWorkArea = new DisplayPlacementService.PhysicalRect(1920, -120, 4480, 1280);
+        var adapted = DisplayPlacementService.RestoreBounds(
+            largerWorkArea,
+            placement,
+            monitorScale: 1,
+            minimumWidthDip: 94,
+            minimumHeightDip: 120);
+        var recaptured = DisplayPlacementService.CaptureBounds(largerWorkArea, adapted);
+        Assert(Math.Abs(recaptured.LeftRatio - placement.LeftRatio) < 0.002 &&
+               Math.Abs(recaptured.TopRatio - placement.TopRatio) < 0.002 &&
+               Math.Abs(recaptured.WidthRatio - placement.WidthRatio) < 0.002 &&
+               Math.Abs(recaptured.HeightRatio - placement.HeightRatio) < 0.002,
+            "Resolution adaptation did not preserve the organizer's proportional layout.");
+        Assert(adapted.Left >= largerWorkArea.Left && adapted.Top >= largerWorkArea.Top &&
+               adapted.Right <= largerWorkArea.Right && adapted.Bottom <= largerWorkArea.Bottom,
+            "Adapted organizer bounds escaped the target monitor work area.");
     }
 
     private static void AssertChildrenFit(AdaptiveIconPanel panel, double width, double height)
