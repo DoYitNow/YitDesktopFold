@@ -29,6 +29,8 @@ public static class DesktopShellItemService
     private const uint ShcnfFlushNoWait = 0x2000;
     private const int CsidlDesktop = 0x0000;
     private const uint SherbNoConfirmation = 0x00000001;
+    private const uint WmCommand = 0x0111;
+    private const int DesktopRefreshCommand = 0x7103;
     private const string VisibilityKey =
         @"Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel";
 
@@ -187,6 +189,7 @@ public static class DesktopShellItemService
         {
             if (existingKey?.GetValue(definition.ClassId) is int hidden && hidden != 0)
             {
+                NotifyDesktopChanged();
                 return true;
             }
         }
@@ -406,25 +409,60 @@ public static class DesktopShellItemService
 
     private static void NotifyDesktopChanged()
     {
-        if (SHGetSpecialFolderLocation(IntPtr.Zero, CsidlDesktop, out var desktopPidl) < 0 ||
-            desktopPidl == IntPtr.Zero)
+        if (SHGetSpecialFolderLocation(IntPtr.Zero, CsidlDesktop, out var desktopPidl) >= 0 &&
+            desktopPidl != IntPtr.Zero)
         {
-            return;
+            try
+            {
+                SHChangeNotify(
+                    ShcneUpdateDir,
+                    ShcnfIdList | ShcnfFlushNoWait,
+                    desktopPidl,
+                    IntPtr.Zero);
+            }
+            finally
+            {
+                Marshal.FreeCoTaskMem(desktopPidl);
+            }
         }
 
-        try
+        var desktopView = FindDesktopView();
+        if (desktopView != IntPtr.Zero)
         {
-            SHChangeNotify(
-                ShcneUpdateDir,
-                ShcnfIdList | ShcnfFlushNoWait,
-                desktopPidl,
+            _ = PostMessage(
+                desktopView,
+                WmCommand,
+                new IntPtr(DesktopRefreshCommand),
                 IntPtr.Zero);
         }
-        finally
-        {
-            Marshal.FreeCoTaskMem(desktopPidl);
-        }
     }
+
+    private static IntPtr FindDesktopView()
+    {
+        var progman = FindWindow("Progman", null);
+        var desktopView = FindWindowEx(progman, IntPtr.Zero, "SHELLDLL_DefView", null);
+        if (desktopView != IntPtr.Zero)
+        {
+            return desktopView;
+        }
+
+        _ = EnumWindows(
+            (window, _) =>
+            {
+                var candidate = FindWindowEx(window, IntPtr.Zero, "SHELLDLL_DefView", null);
+                if (candidate == IntPtr.Zero)
+                {
+                    return true;
+                }
+
+                desktopView = candidate;
+                return false;
+            },
+            IntPtr.Zero);
+        return desktopView;
+    }
+
+    private delegate bool EnumWindowsProcedure(IntPtr window, IntPtr data);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct RecycleBinInformation
@@ -463,6 +501,28 @@ public static class DesktopShellItemService
         uint flags,
         IntPtr item1,
         IntPtr item2);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumWindows(EnumWindowsProcedure callback, IntPtr data);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr FindWindow(string className, string? windowName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr FindWindowEx(
+        IntPtr parent,
+        IntPtr childAfter,
+        string className,
+        string? windowName);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessage(
+        IntPtr window,
+        uint message,
+        IntPtr wParam,
+        IntPtr lParam);
 
     private sealed record ShellDesktopDefinition(
         string ClassId,
