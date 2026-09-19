@@ -75,6 +75,13 @@
             <Setter Property="FontSize" Value="11" />
         </Style>
 
+        <Style x:Key="HiddenDeleteButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource HiddenRestoreButtonStyle}">
+            <Setter Property="Foreground" Value="#E0B2AA" />
+            <Setter Property="Background" Value="#12E0B2AA" />
+        </Style>
+
         <Style x:Key="CloseButtonStyle"
                TargetType="Button"
                BasedOn="{StaticResource FlatButtonStyle}">

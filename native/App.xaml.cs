@@ -200,6 +200,12 @@ public partial class App : Application
         return true;
     }
 
+    public bool RemoveOrganizer(Guid folderId)
+    {
+        var window = FindWindow(folderId);
+        return window is not null && RemoveOrganizer(window);
+    }
+
     public void MarkActive(MainWindow window)
     {
         if (_windows.Contains(window))
@@ -211,7 +217,10 @@ public partial class App : Application
     public IReadOnlyList<HiddenOrganizerSnapshot> GetHiddenOrganizerSnapshots() =>
         _windows
             .Where(window => window.IsOrganizerHidden)
-            .Select(window => new HiddenOrganizerSnapshot(window.FolderState.Id, window.FolderState.Name))
+            .Select(window => new HiddenOrganizerSnapshot(
+                window.FolderState.Id,
+                window.FolderState.Name,
+                window.FolderState.Shortcuts.Count))
             .ToArray();
 
     public bool ShowHiddenOrganizer(Guid folderId)

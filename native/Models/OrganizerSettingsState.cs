@@ -48,4 +48,4 @@ public sealed record OrganizerSettingsSessionSnapshot(
 /// Lightweight runtime projection used by SettingsWindow to recover hidden
 /// organizers without exposing their Window instances to the view.
 /// </summary>
-public sealed record HiddenOrganizerSnapshot(Guid Id, string Name);
+public sealed record HiddenOrganizerSnapshot(Guid Id, string Name, int ItemCount);

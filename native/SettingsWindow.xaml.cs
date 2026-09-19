@@ -159,7 +159,7 @@ public partial class SettingsWindow : Window
             };
             var name = new TextBlock
             {
-                Margin = new Thickness(6, 0, 66, 0),
+                Margin = new Thickness(6, 0, 124, 0),
                 VerticalAlignment = VerticalAlignment.Center,
                 Foreground = new SolidColorBrush(Color.FromRgb(0xC9, 0xCC, 0xCE)),
                 FontSize = 11.5,
@@ -174,11 +174,24 @@ public partial class SettingsWindow : Window
                 Style = (Style)FindResource("HiddenRestoreButtonStyle"),
                 Content = "显示",
                 Tag = organizer.Id,
+                Margin = new Thickness(0, 0, 58, 0),
             };
             AutomationProperties.SetName(restoreButton, $"显示隐藏的整理块 {organizer.Name}");
             restoreButton.Click += RestoreHiddenOrganizer_Click;
+            var deleteButton = new Button
+            {
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+                Style = (Style)FindResource("HiddenDeleteButtonStyle"),
+                Content = "删除",
+                Tag = organizer.Id,
+                IsEnabled = AppHost.OrganizerCount > 1,
+            };
+            AutomationProperties.SetName(deleteButton, $"删除隐藏的整理块 {organizer.Name}");
+            deleteButton.Click += DeleteHiddenOrganizer_Click;
             row.Children.Add(name);
             row.Children.Add(restoreButton);
+            row.Children.Add(deleteButton);
             HiddenOrganizerList.Children.Add(row);
         }
     }
@@ -493,6 +506,68 @@ public partial class SettingsWindow : Window
         }
 
         InlineStatus.Text = "已恢复整理块。";
+        RefreshHiddenOrganizers();
+    }
+
+    private async void DeleteHiddenOrganizer_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: Guid folderId })
+        {
+            return;
+        }
+
+        var organizer = AppHost.GetHiddenOrganizerSnapshots()
+            .FirstOrDefault(candidate => candidate.Id == folderId);
+        if (organizer is null)
+        {
+            InlineStatus.Text = "该整理块已不存在。";
+            RefreshHiddenOrganizers();
+            return;
+        }
+
+        if (AppHost.OrganizerCount <= 1)
+        {
+            InlineStatus.Text = "至少保留一个整理块。";
+            RefreshHiddenOrganizers();
+            return;
+        }
+
+        var message = organizer.ItemCount == 0
+            ? $"删除“{organizer.Name}”？"
+            : $"删除“{organizer.Name}”？其中 {organizer.ItemCount} 个项目会恢复到原生桌面，真实文件不会移动。";
+        var dialog = new GlobalDialogWindow(
+            "删除整理块",
+            message,
+            "删除",
+            secondaryText: null,
+            cancelText: "保留");
+        IsEnabled = false;
+        GlobalDialogResult result;
+        try
+        {
+            result = await dialog.ShowAsync(this);
+        }
+        finally
+        {
+            if (!_completed)
+            {
+                IsEnabled = true;
+                Activate();
+            }
+        }
+
+        if (result is not GlobalDialogResult.Primary)
+        {
+            return;
+        }
+
+        var removed = AppHost.RemoveOrganizer(folderId);
+        if (_completed)
+        {
+            return;
+        }
+
+        InlineStatus.Text = removed ? "已删除整理块。" : "该整理块已不存在。";
         RefreshHiddenOrganizers();
     }
 
